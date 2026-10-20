@@ -6,9 +6,21 @@
     2016-07-30 Preliminary not-so-skeleton driver
 
     TODO:
-    - VIA T2 counter mode emulation
-    - CRTC reset and drawing
     - Bidirectional communications mode
+    - Smooth scroll: the row latch at 9000 (counter A60 supplies RA0-3 to
+      the character ROMs on the real board) is not used yet; RA comes from
+      the CRTC, which is right only for full 10-line rows
+
+    Video: the 6545 never draws a whole frame.  The VIA's T2 counts HSYNCs
+    and its IRQ is the 6502's NMI; each NMI reads VIA port A, whose CA2
+    handshake resets the CRTC, then loads R12/R13 with the next row's
+    address and T2 with the row's height.  So every character row comes
+    from wherever the firmware's row table points -- display RAM, or work
+    RAM for the 25th (status) line -- which is how lines scroll or stay
+    locked independently.  The CRTC's own frame (R4=2, R6=1) only runs
+    through in the vertical blank, which is where VSYNC and the cursor
+    blink count happen.  The driver records each displayed line's address
+    and raster at DE and draws the frame from that record.
 
     Hardware:
     6502A CPU
@@ -62,6 +74,7 @@ public:
 		, m_uart(*this, "a%uuart", 49U)
 		, m_keyboard(*this, "keyboard")
 		, m_vram(*this, "vram")
+		, m_ram(*this, "mainram")
 		, m_gfx(*this, "graphics")
 		, m_dsw(*this, "DSW%u", 0U)
 	{ }
@@ -76,18 +89,36 @@ private:
 	void via_a_w(uint8_t data);
 	void via_b_w(uint8_t data);
 	uint8_t via_b_r();
-	void crtc_vs_w(int state);
-	MC6845_UPDATE_ROW(crtc_update_row);
 	MC6845_ON_UPDATE_ADDR_CHANGED(crtc_update_addr);
+	void crtc_de_w(int state);
+	void crtc_vs_w(int state);
+	void via_cb2_w(int state);
+	TIMER_CALLBACK_MEMBER(crtc_reset_release);
+	uint32_t screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
 
 	void row_addr_w(uint8_t data);
 	void via_crtc_reset_w(int state);
 
 	void tv950_mem(address_map &map) ATTR_COLD;
 
+	// what the CRTC put out on one displayed scan line
+	struct scanline
+	{
+		uint16_t addr;
+		uint8_t ra;
+		int16_t cursor;
+	};
+	static constexpr int VISIBLE_LINES = 250;  // 25 rows of 10
+
 	uint8_t m_via_row = 0;
-	uint8_t m_attr_row = 0;
-	uint8_t m_attr_screen = 0;
+	bool m_bow = false;            // PA5: black on white
+	bool m_force_blank = false;    // PA7
+	bool m_blink = false;          // CB2: blink-attribute phase
+	scanline m_lines[2][VISIBLE_LINES];
+	int m_fill = 0;                // buffer being recorded; the other is shown
+	int m_line_count = 0;
+	int m_shown_count = 0;
+	emu_timer *m_reset_timer = nullptr;
 
 	required_device<m6502_device> m_maincpu;
 	required_device<via6522_device> m_via;
@@ -95,11 +126,11 @@ private:
 	required_device_array<mos6551_device, 3> m_uart;
 	required_device<tv950kb_device> m_keyboard;
 	required_shared_ptr<uint8_t> m_vram;
+	required_shared_ptr<uint8_t> m_ram;
 	required_region_ptr<uint16_t> m_gfx;
 	required_ioport_array<4> m_dsw;
 
 	int m_row_addr = 0;
-	int m_row = 0;
 };
 
 void tv950_state::machine_start()
@@ -107,12 +138,20 @@ void tv950_state::machine_start()
 	m_uart[0]->write_dcd(0);
 	m_uart[0]->write_dsr(0);
 	m_uart[2]->write_cts(0);
+
+	m_reset_timer = timer_alloc(FUNC(tv950_state::crtc_reset_release), this);
+
+	save_item(NAME(m_via_row));
+	save_item(NAME(m_bow));
+	save_item(NAME(m_force_blank));
+	save_item(NAME(m_blink));
+	save_item(NAME(m_row_addr));
 }
 
 void tv950_state::tv950_mem(address_map &map)
 {
 	map.unmap_value_high();
-	map(0x0000, 0x07ff).ram();
+	map(0x0000, 0x07ff).ram().share("mainram");
 	map(0x2000, 0x3fff).ram().share("vram"); // VRAM
 	map(0x8100, 0x8100).rw(m_crtc, FUNC(r6545_1_device::status_r), FUNC(r6545_1_device::address_w));
 	map(0x8101, 0x8101).rw(m_crtc, FUNC(r6545_1_device::register_r), FUNC(r6545_1_device::register_w));
@@ -203,26 +242,56 @@ INPUT_PORTS_END
 
 void tv950_state::machine_reset()
 {
-	m_row = 0;
 	m_via_row = 0;
-	m_attr_row = 0;
-	m_attr_screen = 0;
+	m_line_count = 0;
+	m_shown_count = 0;
 }
 
+// R8 selects transparent memory addressing, which needs a handler
+MC6845_ON_UPDATE_ADDR_CHANGED( tv950_state::crtc_update_addr )
+{
+}
+
+// a displayed line begins: note where its characters come from
+void tv950_state::crtc_de_w(int state)
+{
+	if (state && m_line_count < VISIBLE_LINES)
+		m_lines[m_fill][m_line_count++] = { m_crtc->line_address(), m_crtc->get_ra(), m_crtc->cursor_x() };
+}
+
+// VSYNC comes once a frame, in the blank between the last row and the first
 void tv950_state::crtc_vs_w(int state)
 {
-	m_attr_screen = 0;
+	if (state)
+	{
+		m_shown_count = m_line_count;
+		m_fill ^= 1;
+		m_line_count = 0;
+	}
 }
 
+// CA2 low pulls the CRTC's RESET; A64/A71 release it seven character clocks
+// later, and that release is CA1's falling edge (PCR selects it), which
+// ends the handshake and raises CA2 again
 void tv950_state::via_crtc_reset_w(int state)
 {
-	//printf("via_crtc_reset_w: %d\n", state);
-	m_via->write_ca1(state);
-
 	if (!state)
 	{
-		//m_crtc->device_reset();
+		m_crtc->reset_w(0);
+		m_via->write_ca1(1);
+		m_reset_timer->adjust(attotime::from_ticks(7, MASTER_CLOCK / 14));
 	}
+}
+
+TIMER_CALLBACK_MEMBER(tv950_state::crtc_reset_release)
+{
+	m_crtc->reset_w(1);
+	m_via->write_ca1(0);
+}
+
+void tv950_state::via_cb2_w(int state)
+{
+	m_blink = state;
 }
 
 void tv950_state::row_addr_w(uint8_t data)
@@ -233,7 +302,9 @@ void tv950_state::row_addr_w(uint8_t data)
 void tv950_state::via_a_w(uint8_t data)
 {
 	m_via_row = ~data & 15;
-	// PA4, 5, 7 to do
+	m_bow = BIT(data, 5);
+	m_force_blank = BIT(data, 7);
+	// PA4 to do
 }
 
 void tv950_state::via_b_w(uint8_t data)
@@ -251,35 +322,66 @@ uint8_t tv950_state::via_b_r()
 	return data;
 }
 
-MC6845_ON_UPDATE_ADDR_CHANGED( tv950_state::crtc_update_addr )
+// Draw the last complete frame from the recorded lines.  The CRTC addresses
+// the CPU's memory: display RAM at 2000-3FFF, work RAM (the status line)
+// below.  A character code 90-9F is an attribute: it takes a cell, shown as
+// a half-intensity space, and holds from there to the end of the screen in
+// display order (A18/A19 carry it from row to row).  Its low bits are
+// blank, blink, reverse and underline; half intensity is bit 14 of the
+// glyph word, per character.
+uint32_t tv950_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
 {
-}
+	rgb_t const bright = rgb_t::white();
+	rgb_t const dim(0xa0, 0xa0, 0xa0);
+	scanline const *const lines = m_lines[m_fill ^ 1];
+	uint8_t attr = 0, row_attr = 0;
 
-MC6845_UPDATE_ROW( tv950_state::crtc_update_row )
-{
-	if (ra)
-		m_attr_row = m_attr_screen;
-	else
-		m_attr_screen = m_attr_row;
-
-	uint32_t *p = &bitmap.pix(m_row);
-	rgb_t fg(255,255,255,255);
-	rgb_t bg(0,0,0,0);
-
-	for(uint8_t x = 0; x < x_count; x++)
+	for (int y = 0; y < VISIBLE_LINES; y++)
 	{
-		uint8_t chr = m_vram[ma + x];
-		if ((chr & 0x90)==0x90)
-			m_attr_row = chr & 15;
-		uint16_t data = m_gfx[chr * 16 + (m_row % 10)];
-		if (x == cursor_x)
-			data ^= 0xff;
-		// apply attributes...
+		bool const draw = y >= cliprect.top() && y <= cliprect.bottom();
+		if (y >= m_shown_count || m_force_blank)
+		{
+			if (draw)
+				bitmap.plot_box(0, y, 80 * 14, 1, rgb_t::black());
+			continue;
+		}
 
-		for (uint8_t i = 0; i < 14; i++)
-			*p++ = BIT( data, 13-i ) ? fg : bg;
+		scanline const &line = lines[y];
+		if (line.ra == 0)
+			row_attr = attr;
+		attr = row_attr;
+
+		uint32_t *p = &bitmap.pix(y);
+		for (int x = 0; x < 80; x++)
+		{
+			uint16_t const addr = (line.addr + x) & 0x3fff;
+			uint8_t const chr = BIT(addr, 13) ? m_vram[addr & 0x1fff] : m_ram[addr & 0x07ff];
+			uint16_t glyph = m_gfx[chr << 4 | (line.ra & 15)];
+			uint8_t cell_attr = attr;
+			if ((chr & 0xf0) == 0x90)
+			{
+				cell_attr = attr & chr;
+				attr = chr & 0x0f;
+				glyph = 1 << 14;
+			}
+
+			bool const hide = BIT(cell_attr, 0) || (BIT(cell_attr, 1) && m_blink);
+			uint16_t dots = hide ? 0 : (glyph & 0x3fff);
+			if (BIT(cell_attr, 3) && line.ra == 9)
+				dots = 0x3fff;
+			// flip-flop A31 delays the CRTC's CURSOR one character (DEL CURSOR)
+			bool const cursor = line.cursor >= 0 && x == line.cursor + 1;
+			if (BIT(cell_attr, 2) ^ cursor ^ m_bow)
+				dots ^= 0x3fff;
+
+			if (!draw)
+				continue;
+			rgb_t const fg = BIT(glyph, 14) ? dim : bright;
+			for (int i = 0; i < 14; i++)
+				*p++ = BIT(dots, 13 - i) ? fg : rgb_t::black();
+		}
 	}
-	m_row = (m_row + 1) % 250;
+	return 0;
 }
 
 void tv950_state::tv950(machine_config &config)
@@ -293,27 +395,29 @@ void tv950_state::tv950(machine_config &config)
 	mainirq.output_handler().append(m_via, FUNC(via6522_device::write_pa6)).invert();
 
 	screen_device &screen(SCREEN(config, "screen"));
-	screen.set_raw(MASTER_CLOCK, 1200, 0, 1120, 370, 0, 250);   // not real values
-	screen.set_screen_update("crtc", FUNC(r6545_1_device::screen_update));
+	// 105 characters of 14 dots per line (R0), 25 rows of 10 lines plus a
+	// 20-line vertical blank: about 16.2 kHz and 60 Hz
+	screen.set_raw(MASTER_CLOCK, 105 * 14, 0, 80 * 14, 270, 0, VISIBLE_LINES);
+	screen.set_screen_update(FUNC(tv950_state::screen_update));
 
 	// there are many 6845 CRTC submodels, the Theory of Operation manual references the Rockwell R6545-1 specificially.
 	R6545_1(config, m_crtc, MASTER_CLOCK/14);
 	m_crtc->set_screen("screen");
 	m_crtc->set_show_border_area(false);
 	m_crtc->set_char_width(14);
-	m_crtc->set_update_row_callback(FUNC(tv950_state::crtc_update_row));
 	m_crtc->set_on_update_addr_change_callback(FUNC(tv950_state::crtc_update_addr));
+	m_crtc->out_de_callback().set(FUNC(tv950_state::crtc_de_w));
 	m_crtc->out_hsync_callback().set(m_via, FUNC(via6522_device::write_pb6)).invert();
 	m_crtc->out_vsync_callback().set(FUNC(tv950_state::crtc_vs_w));
 	m_crtc->set_screen(nullptr);
 
 	MOS6522(config, m_via, MASTER_CLOCK/14);
-	//m_via->irq_handler().set_inputline(m_maincpu, M6502_NMI_LINE);
+	m_via->irq_handler().set_inputline(m_maincpu, M6502_NMI_LINE);
 	m_via->writepa_handler().set(FUNC(tv950_state::via_a_w));
 	m_via->writepb_handler().set(FUNC(tv950_state::via_b_w));
 	m_via->readpb_handler().set(FUNC(tv950_state::via_b_r));
 	m_via->ca2_handler().set(FUNC(tv950_state::via_crtc_reset_w));
-	//m_via->cb2_handler().set(FUNC(tv950_state::via_blink_rate_w));
+	m_via->cb2_handler().set(FUNC(tv950_state::via_cb2_w));
 
 	MOS6551(config, m_uart[0], MASTER_CLOCK/14).set_xtal(MASTER_CLOCK/13); // for keyboard
 	m_uart[0]->irq_handler().set("mainirq", FUNC(input_merger_device::in_w<0>));
