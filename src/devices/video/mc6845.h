@@ -120,6 +120,16 @@ public:
 	/* return the current value on the RA0-RA4 pins */
 	uint8_t get_ra();
 
+	/* RESET pin (active low): clears the counters and holds the outputs low,
+	   keeping the registers; release starts a new frame at R12/R13 */
+	void reset_w(int state);
+
+	/* address of the first character of the current line, and the cursor's
+	   column on it (-1 if not on this line or blinked off), for drivers that
+	   draw from the line timing rather than from screen_update() */
+	uint16_t line_address() const { return m_line_address; }
+	int16_t cursor_x() const { return m_cursor_x; }
+
 	/* simulates the LO->HI clocking of the light pen pin (pin 3) */
 	void assert_light_pen_input();
 	void assert_light_pen_input(u16);
@@ -199,6 +209,7 @@ protected:
 	uint8_t   m_adjust_active;
 	uint16_t  m_line_address;
 	int16_t   m_cursor_x;
+	bool      m_reset_held;
 
 	/* timers */
 	emu_timer *m_line_timer;
@@ -242,6 +253,7 @@ protected:
 	bool is_row_end() const;
 	virtual bool check_cursor_visible(uint16_t ra, uint16_t line_addr);
 	TIMER_CALLBACK_MEMBER(handle_line_timer);
+	void start_line(bool new_vsync);
 	TIMER_CALLBACK_MEMBER(de_off_tick);
 	TIMER_CALLBACK_MEMBER(cursor_on);
 	TIMER_CALLBACK_MEMBER(cursor_off);

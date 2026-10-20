@@ -405,7 +405,7 @@ void mc6845_device::recompute_parameters(bool postload)
 		m_hsync_off_pos = hsync_off_pos;
 		m_vsync_on_pos = vsync_on_pos;
 		m_vsync_off_pos = vsync_off_pos;
-		if (m_line_timer && !m_line_timer->enabled() && m_has_valid_parameters)
+		if (m_line_timer && !m_line_timer->enabled() && m_has_valid_parameters && !m_reset_held)
 		{
 			m_line_timer->adjust(cclks_to_attotime(m_horiz_char_total + 1));
 		}
@@ -670,6 +670,14 @@ TIMER_CALLBACK_MEMBER(mc6845_device::handle_line_timer)
 		}
 	}
 
+	start_line(new_vsync);
+}
+
+
+/* begin the line the counters now describe: schedule its DE, cursor and
+   HSYNC edges and the end-of-line callback */
+void mc6845_device::start_line(bool new_vsync)
+{
 	if (m_line_enable_ff)
 	{
 		/* Schedule DE off signal change */
@@ -773,6 +781,44 @@ uint16_t mc6845_device::get_ma()
 uint8_t mc6845_device::get_ra()
 {
 	return m_raster_counter;
+}
+
+
+void mc6845_device::reset_w(int state)
+{
+	bool const held = !state;
+	if (held == m_reset_held)
+		return;
+	m_reset_held = held;
+
+	if (held)
+	{
+		/* the counters stop and every output goes low until release */
+		m_line_timer->adjust(attotime::never);
+		m_de_off_timer->adjust(attotime::never);
+		m_cursor_on_timer->adjust(attotime::never);
+		m_cursor_off_timer->adjust(attotime::never);
+		m_hsync_on_timer->adjust(attotime::never);
+		m_hsync_off_timer->adjust(attotime::never);
+		m_vsync_ff = 0;
+		set_hsync(false);
+		set_vsync(false);
+		set_cur(false);
+		set_de(false);
+	}
+	else if (m_has_valid_parameters)
+	{
+		/* restart at the first line of a frame; the blink counter is not
+		   reset, it advances only when a frame completes */
+		m_character_counter = 0;
+		m_cursor_x = -1;
+		m_raster_counter = 0;
+		m_line_counter = 0;
+		m_adjust_active = 0;
+		m_line_address = m_disp_start_addr;
+		m_line_enable_ff = true;
+		start_line(match_line());
+	}
 }
 
 
@@ -1002,6 +1048,7 @@ void mc6845_device::device_start()
 	m_cursor_state = 0;
 	m_update_ready_bit = 0;
 	m_line_address = 0;
+	m_reset_held = false;
 	m_current_disp_addr = 0;
 	m_disp_start_addr = 0;
 	m_noninterlace_adjust = 1;
@@ -1051,6 +1098,7 @@ void mc6845_device::device_start()
 	save_item(NAME(m_adjust_active));
 	save_item(NAME(m_line_address));
 	save_item(NAME(m_cursor_x));
+	save_item(NAME(m_reset_held));
 	save_item(NAME(m_has_valid_parameters));
 }
 
@@ -1064,7 +1112,7 @@ void mc6845_device::device_reset()
 
 	m_out_vsync_cb(false);
 
-	if (!m_line_timer->enabled() && m_has_valid_parameters)
+	if (!m_line_timer->enabled() && m_has_valid_parameters && !m_reset_held)
 	{
 		m_line_timer->adjust(cclks_to_attotime(m_horiz_char_total + 1));
 	}
