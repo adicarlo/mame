@@ -31,7 +31,9 @@
     VIA hookup (see schematics):
     PA3 = beep?
     PA5 = inverse video
-    PA6 = IRQ in
+    PA6 = IRQ out: the NMI handler drives it low after the last row to ask
+          for the frame's housekeeping (cursor position, blink, ...), which
+          the IRQ handler runs while it is low; DDRA is all outputs
     PA7 = force blank
     PB6 = Hblank in
     PB7 = out speaker
@@ -70,6 +72,7 @@ public:
 		: driver_device(mconfig, type, tag)
 		, m_maincpu(*this, "maincpu")
 		, m_via(*this, "via")
+	, m_mainirq(*this, "mainirq")
 		, m_crtc(*this, "crtc")
 		, m_uart(*this, "a%uuart", 49U)
 		, m_keyboard(*this, "keyboard")
@@ -122,6 +125,7 @@ private:
 
 	required_device<m6502_device> m_maincpu;
 	required_device<via6522_device> m_via;
+	required_device<input_merger_device> m_mainirq;
 	required_device<r6545_1_device> m_crtc;
 	required_device_array<mos6551_device, 3> m_uart;
 	required_device<tv950kb_device> m_keyboard;
@@ -303,6 +307,7 @@ void tv950_state::via_a_w(uint8_t data)
 {
 	m_via_row = ~data & 15;
 	m_bow = BIT(data, 5);
+	m_mainirq->in_w<3>(!BIT(data, 6));
 	m_force_blank = BIT(data, 7);
 	// PA4 to do
 }
@@ -392,7 +397,6 @@ void tv950_state::tv950(machine_config &config)
 
 	input_merger_device &mainirq(INPUT_MERGER_ANY_HIGH(config, "mainirq")); // open collector
 	mainirq.output_handler().set_inputline(m_maincpu, m6502_device::IRQ_LINE);
-	mainirq.output_handler().append(m_via, FUNC(via6522_device::write_pa6)).invert();
 
 	screen_device &screen(SCREEN(config, "screen"));
 	// 105 characters of 14 dots per line (R0), 25 rows of 10 lines plus a
