@@ -374,8 +374,9 @@ uint32_t tv950_state::screen_update(screen_device &screen, bitmap_rgb32 &bitmap,
 			uint16_t dots = hide ? 0 : (glyph & 0x3fff);
 			if (BIT(cell_attr, 3) && line.ra == 9)
 				dots = 0x3fff;
-			// flip-flop A31 delays the CRTC's CURSOR one character (DEL CURSOR)
-			bool const cursor = line.cursor >= 0 && x == line.cursor + 1;
+			// A31's one-character delay of CURSOR (DEL CURSOR) only matches the
+			// character pipeline's latency, which drawing here does not have
+			bool const cursor = x == line.cursor;
 			if (BIT(cell_attr, 2) ^ cursor ^ m_bow)
 				dots ^= 0x3fff;
 
