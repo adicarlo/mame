@@ -243,7 +243,14 @@ void mc6845_device::register_w(uint8_t data)
 		case 0x07:  m_vert_sync_pos    =   data & 0x7f; break;
 		case 0x08:  m_mode_control     =   data & 0xff; break;
 		case 0x09:  m_max_ras_addr     =   data & 0x1f; break;
-		case 0x0a:  m_cursor_start_ras =   data & 0x7f; break;
+		case 0x0a:
+			m_cursor_start_ras = data & 0x7f;
+			// steady (00) and no-cursor (01) need no field count, so they
+			// apply at once rather than at the next frame start, which a
+			// CRTC reset every row (TeleVideo 950) never reaches
+			if (!BIT(m_cursor_start_ras, 6))
+				m_cursor_state = !BIT(m_cursor_start_ras, 5);
+			break;
 		case 0x0b:  m_cursor_end_ras   =   data & 0x1f; break;
 		case 0x0c:  m_disp_start_addr  = ((data & 0x3f) << 8) | (m_disp_start_addr & 0x00ff); break;
 		case 0x0d:  m_disp_start_addr  = ((data & 0xff) << 0) | (m_disp_start_addr & 0xff00); break;
