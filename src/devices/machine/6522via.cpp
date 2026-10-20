@@ -209,15 +209,17 @@ void via6522_device::counter2_decrement()
 	if (!T2_COUNT_PB6(m_acr))
 		return;
 
-	// count down on T2CL
-	if (m_t2cl-- != 0)
+	// "The interrupt flag will be set when T2 reaches zero" (Synertek 1979
+	// data catalog, SY6522; same in the Rockwell R6522 and WDC W65C22
+	// datasheets, whose figures show IRQ on the pulse that takes the count
+	// from 1 to 0): N pulses after loading N, not N+1
+	uint16_t const count = ((m_t2ch << 8) | m_t2cl) - 1;
+	m_t2cl = count & 0xff;
+	m_t2ch = count >> 8;
+	if (count != 0)
 		return;
 
-	// borrow from T2CH
-	if (m_t2ch-- != 0)
-		return;
-
-	// underflow causes only one interrupt between T2CH writes
+	// only one interrupt between T2CH writes; the count keeps decrementing
 	if (m_t2_active)
 	{
 		m_t2_active = 0;
