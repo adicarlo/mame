@@ -30,7 +30,7 @@
 
     VIA hookup (see schematics):
     PA3 = beep?
-    PA5 = inverse video
+    PA5 = normal video (low: black on white)
     PA6 = IRQ out: the NMI handler drives it low after the last row to ask
           for the frame's housekeeping (cursor position, blink, ...), which
           the IRQ handler runs while it is low; DDRA is all outputs
@@ -114,7 +114,7 @@ private:
 	static constexpr int VISIBLE_LINES = 250;  // 25 rows of 10
 
 	uint8_t m_via_row = 0;
-	bool m_bow = false;            // PA5: black on white
+	bool m_bow = false;            // PA5 low: black on white
 	bool m_force_blank = false;    // PA7
 	bool m_blink = false;          // CB2: blink-attribute phase
 	scanline m_lines[2][VISIBLE_LINES];
@@ -174,9 +174,8 @@ void tv950_state::tv950_mem(address_map &map)
 // order of the bits follow what the firmware does with them at power-on
 // (E0B2-E1C5); locations follow the Operator's Manual (B300002-001, figs
 // 2-4 and 2-5), whose S1-5/S1-6 legends are the other way round from the
-// bits.  The video polarity of S2-6 is unverified: the manual says up is
-// white on black, but the firmware copies an open switch to PA5, which the
-// driver treats as black on white.
+// bits.  S2-6 open (up) is white on black, as the manual says: the firmware
+// copies it to PA5, and ESC d (normal background) sets PA5.
 static INPUT_PORTS_START( tv950 )
 	PORT_START("DSW0")
 	PORT_DIPNAME( 0x0f, 0x00, "Main Port Baud Rate" ) PORT_DIPLOCATION("S1:1,2,3,4")
@@ -236,9 +235,9 @@ static INPUT_PORTS_START( tv950 )
 	PORT_DIPSETTING(    0x01, "Full Duplex" )
 	PORT_DIPSETTING(    0x02, "Block" )
 	PORT_DIPSETTING(    0x03, "Local" )
-	PORT_DIPNAME( 0x04, 0x00, "Video" ) PORT_DIPLOCATION("S2:6")
-	PORT_DIPSETTING(    0x00, "White on Black" )
-	PORT_DIPSETTING(    0x04, "Black on White" )
+	PORT_DIPNAME( 0x04, 0x04, "Video" ) PORT_DIPLOCATION("S2:6")
+	PORT_DIPSETTING(    0x04, "White on Black" )
+	PORT_DIPSETTING(    0x00, "Black on White" )
 	PORT_DIPNAME( 0x38, 0x00, "Parity" ) PORT_DIPLOCATION("S2:5,4,3")
 	PORT_DIPSETTING(    0x00, DEF_STR( None ) )
 	PORT_DIPSETTING(    0x08, "Odd" )
@@ -320,7 +319,7 @@ void tv950_state::row_addr_w(uint8_t data)
 void tv950_state::via_a_w(uint8_t data)
 {
 	m_via_row = ~data & 15;
-	m_bow = BIT(data, 5);
+	m_bow = !BIT(data, 5);
 	m_mainirq->in_w<3>(!BIT(data, 6));
 	m_force_blank = BIT(data, 7);
 	// PA4 to do
