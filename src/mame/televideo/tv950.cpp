@@ -94,6 +94,7 @@ private:
 	uint8_t via_b_r();
 	MC6845_ON_UPDATE_ADDR_CHANGED(crtc_update_addr);
 	void crtc_de_w(int state);
+	void crtc_hs_w(int state);
 	void crtc_vs_w(int state);
 	void via_cb2_w(int state);
 	TIMER_CALLBACK_MEMBER(crtc_reset_release);
@@ -122,6 +123,7 @@ private:
 	int m_line_count = 0;
 	int m_shown_count = 0;
 	emu_timer *m_reset_timer = nullptr;
+	int m_via_ca2 = 1;
 
 	required_device<m6502_device> m_maincpu;
 	required_device<via6522_device> m_via;
@@ -146,6 +148,7 @@ void tv950_state::machine_start()
 	m_reset_timer = timer_alloc(FUNC(tv950_state::crtc_reset_release), this);
 
 	save_item(NAME(m_via_row));
+	save_item(NAME(m_via_ca2));
 	save_item(NAME(m_bow));
 	save_item(NAME(m_force_blank));
 	save_item(NAME(m_blink));
@@ -287,12 +290,20 @@ void tv950_state::crtc_vs_w(int state)
 	}
 }
 
-// CA2 low pulls the CRTC's RESET; A64/A71 release it seven character clocks
-// later, and that release is CA1's falling edge (PCR selects it), which
-// ends the handshake and raises CA2 again
+// CA2 low arms the CRTC's RESET, but A70 (74LS00) passes it only while HSN
+// is high, so it lands on the next HSYNC, aligned to the line; A64/A71
+// release it seven character clocks later, and that release is CA1's falling
+// edge (PCR selects it), which ends the handshake and raises CA2 again
 void tv950_state::via_crtc_reset_w(int state)
 {
-	if (!state)
+	m_via_ca2 = state;
+}
+
+// PB6 is /HSN: T2 counts HSYNC's rising edge
+void tv950_state::crtc_hs_w(int state)
+{
+	m_via->write_pb6(!state);
+	if (state && !m_via_ca2 && !m_reset_timer->enabled())
 	{
 		m_crtc->reset_w(0);
 		m_via->write_ca1(1);
@@ -425,7 +436,7 @@ void tv950_state::tv950(machine_config &config)
 	m_crtc->set_char_width(14);
 	m_crtc->set_on_update_addr_change_callback(FUNC(tv950_state::crtc_update_addr));
 	m_crtc->out_de_callback().set(FUNC(tv950_state::crtc_de_w));
-	m_crtc->out_hsync_callback().set(m_via, FUNC(via6522_device::write_pb6)).invert();
+	m_crtc->out_hsync_callback().set(FUNC(tv950_state::crtc_hs_w));
 	m_crtc->out_vsync_callback().set(FUNC(tv950_state::crtc_vs_w));
 	m_crtc->set_screen(nullptr);
 
