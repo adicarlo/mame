@@ -184,6 +184,7 @@ private:
 	uint8_t m_paint_attr;
 	uint8_t m_row_line;
 	uint8_t m_row_end;
+	bool m_row_attr_curs;
 
 	// smooth scroll, as latched for the frame
 	uint8_t m_drb_row;
