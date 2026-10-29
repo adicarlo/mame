@@ -405,7 +405,8 @@ void device_serial_interface::transmit_register_setup(u8 data_byte)
 	/* parity */
 	if (m_df_parity != PARITY_NONE)
 	{
-		/* odd or even parity */
+		/* odd or even parity, over the data bits actually transmitted */
+		const u8 data_bits = data_byte & ~(0xff << m_df_word_length);
 		u8 parity = 0;
 		switch (m_df_parity)
 		{
@@ -413,10 +414,10 @@ void device_serial_interface::transmit_register_setup(u8 data_byte)
 			// get parity
 			// if parity[0] = 0, data has even parity - i.e. there is an even number of one bits in the data
 			// if parity[0] = 1, data has odd parity - i.e. there is an odd number of one bits in the data
-			parity = BIT(std::popcount(data_byte), 0) ^ 1;
+			parity = BIT(std::popcount(data_bits), 0) ^ 1;
 			break;
 		case PARITY_EVEN:
-			parity = BIT(std::popcount(data_byte), 0);
+			parity = BIT(std::popcount(data_bits), 0);
 			break;
 		case PARITY_MARK:
 			parity = 1;
