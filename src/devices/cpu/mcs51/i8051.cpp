@@ -247,14 +247,15 @@ void mcs51_cpu_device::scon_w(u8 data)
 
 u8 mcs51_cpu_device::sbuf_r()
 {
+	// SBUF is two registers: reads return the receive buffer
 	return m_sbuf;
 }
 
 void mcs51_cpu_device::sbuf_w(u8 data)
 {
-	m_sbuf = data;
-	LOGMASKED(LOG_TX, "tx byte 0x%02x\n", m_sbuf);
-	m_uart.data_out = m_sbuf;
+	// and writes load the transmit buffer, leaving the receive buffer alone
+	LOGMASKED(LOG_TX, "tx byte 0x%02x\n", data);
+	m_uart.data_out = data;
 	m_uart.txbit = SIO_START;
 }
 
