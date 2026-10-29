@@ -112,6 +112,7 @@ private:
 	inline void recompute_cursor();
 	inline unsigned row_first_line(unsigned row) const;
 	inline unsigned row_end_line(unsigned row) const;
+	inline unsigned data_rows() const;
 	inline void recompute_parameters();
 
 	// address space configurations

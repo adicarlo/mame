@@ -389,10 +389,7 @@ inline void crt9007_device::update_drb_timer(bool state)
 			// DRB has just ended on the top scan line of data row m_drb_row
 			unsigned const lines = row_end_line(m_drb_row) - row_first_line(m_drb_row);
 
-			// a smooth scroll paints one extra data row, which ends the scroll interval
-			unsigned const rows = VISIBLE_DATA_ROWS_PER_FRAME + ((m_scroll_offset && (m_scroll_end <= VISIBLE_DATA_ROWS_PER_FRAME)) ? 1 : 0);
-
-			if (++m_drb_row >= rows)
+			if (++m_drb_row >= data_rows())
 				next_y = 0;
 			else
 				next_y = y + lines - 1;
@@ -405,6 +402,14 @@ inline void crt9007_device::update_drb_timer(bool state)
 		m_scroll_overflow = SMOOTH_SCROLL_OFFSET_OVERFLOW;
 		m_scroll_start = DATA_ROW_START;
 		m_scroll_end = DATA_ROW_END;
+
+		// the frame timer follows the last row table read, at the top of the last data row
+		// (single row buffer) or of the one before it (double row buffer)
+		unsigned const rows = data_rows() - ((OPERATION_MODE == OPERATION_MODE_DOUBLE_ROW_BUFFER) ? 1 : 0);
+		int frame_timer_line = VERTICAL_DELAY;
+		for (unsigned row = 0; (row + 1) < rows; row++)
+			frame_timer_line += row_end_line(row) - row_first_line(row);
+		m_frame_timer->adjust(screen().time_until_pos(frame_timer_line, 0));
 	}
 
 	// a data row of one scan line is followed directly by the next row boundary
@@ -429,6 +434,17 @@ inline void crt9007_device::update_drb_timer(bool state)
 inline unsigned crt9007_device::row_first_line(unsigned row) const
 {
 	return (m_scroll_offset && (row == m_scroll_start)) ? m_scroll_offset : 0;
+}
+
+
+//-------------------------------------------------
+//  data_rows - a smooth scroll paints one extra
+//  data row, which ends the scroll interval
+//-------------------------------------------------
+
+inline unsigned crt9007_device::data_rows() const
+{
+	return VISIBLE_DATA_ROWS_PER_FRAME + ((m_scroll_offset && (m_scroll_end <= VISIBLE_DATA_ROWS_PER_FRAME)) ? 1 : 0);
 }
 
 
