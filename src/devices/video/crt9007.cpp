@@ -381,21 +381,73 @@ inline void crt9007_device::update_drb_timer(bool state)
 	{
 		if (y == 1)
 		{
+			m_drb_row = 0;
 			next_y = VERTICAL_DELAY - 1;
-		}
-		else if (y == m_drb_bottom)
-		{
-			next_y = 0;
 		}
 		else
 		{
-			next_y = y + SCAN_LINES_PER_DATA_ROW - 1;
+			// DRB has just ended on the top scan line of data row m_drb_row
+			unsigned const lines = row_end_line(m_drb_row) - row_first_line(m_drb_row);
+
+			// a smooth scroll paints one extra data row, which ends the scroll interval
+			unsigned const rows = VISIBLE_DATA_ROWS_PER_FRAME + ((m_scroll_offset && (m_scroll_end <= VISIBLE_DATA_ROWS_PER_FRAME)) ? 1 : 0);
+
+			if (++m_drb_row >= rows)
+				next_y = 0;
+			else
+				next_y = y + lines - 1;
 		}
+	}
+	else if (y && !m_drb_row)
+	{
+		// the smooth scroll registers take effect at the boundary of the frame's first data row
+		m_scroll_offset = PAGE_BLANK ? 0 : SMOOTH_SCROLL_OFFSET;
+		m_scroll_overflow = SMOOTH_SCROLL_OFFSET_OVERFLOW;
+		m_scroll_start = DATA_ROW_START;
+		m_scroll_end = DATA_ROW_END;
+	}
+
+	// a data row of one scan line is followed directly by the next row boundary
+	if (next_y == y)
+	{
+		m_drb_timer->adjust(attotime::zero, !state);
+		return;
 	}
 
 	attotime duration = screen().time_until_pos(next_y, next_x);
 
 	m_drb_timer->adjust(duration, !state);
+}
+
+
+//-------------------------------------------------
+//  row_first_line - the scan line count a data
+//  row starts at: the data row starting a smooth
+//  scroll starts at the offset
+//-------------------------------------------------
+
+inline unsigned crt9007_device::row_first_line(unsigned row) const
+{
+	return (m_scroll_offset && (row == m_scroll_start)) ? m_scroll_offset : 0;
+}
+
+
+//-------------------------------------------------
+//  row_end_line - and the count it ends before:
+//  the data row ending a smooth scroll shows only
+//  the scan lines scrolled off the starting row
+//-------------------------------------------------
+
+inline unsigned crt9007_device::row_end_line(unsigned row) const
+{
+	unsigned const lines = SCAN_LINES_PER_DATA_ROW;
+
+	if (m_scroll_offset && (row == m_scroll_start))
+		return m_scroll_overflow ? (lines * 2) : lines;
+	else if (m_scroll_offset && (row == m_scroll_end))
+		return m_scroll_overflow ? (m_scroll_offset - lines) : m_scroll_offset;
+	else
+		return lines;
 }
 
 
@@ -569,6 +621,13 @@ void crt9007_device::device_start()
 	save_item(NAME(m_pending_attr));
 	save_item(NAME(m_paint_attr));
 	save_item(NAME(m_row_line));
+	save_item(NAME(m_row_end));
+	save_item(NAME(m_drb_row));
+	save_item(NAME(m_paint_row));
+	save_item(NAME(m_scroll_offset));
+	save_item(NAME(m_scroll_overflow));
+	save_item(NAME(m_scroll_start));
+	save_item(NAME(m_scroll_end));
 }
 
 
@@ -621,6 +680,13 @@ void crt9007_device::device_reset()
 	m_pending_attr = 0;
 	m_paint_attr = 0;
 	m_row_line = 0;
+	m_row_end = 0;
+	m_drb_row = 0;
+	m_paint_row = 0;
+	m_scroll_offset = 0;
+	m_scroll_overflow = false;
+	m_scroll_start = 0;
+	m_scroll_end = 0;
 
 	// 29 (WBEN) = 0
 	m_write_wben(0);
@@ -713,7 +779,9 @@ TIMER_CALLBACK_MEMBER(crt9007_device::vlt_update)
 		// DRB is active through the top scan line of a data row
 		if (!m_drb)
 		{
-			m_row_line = 0;
+			m_paint_row = m_drb_row;
+			m_row_line = row_first_line(m_paint_row);
+			m_row_end = row_end_line(m_paint_row);
 			m_paint_attr = (OPERATION_MODE == OPERATION_MODE_DOUBLE_ROW_BUFFER) ? m_pending_attr : m_next_attr;
 		}
 		else if (m_row_line < 0xff)
@@ -730,7 +798,7 @@ TIMER_CALLBACK_MEMBER(crt9007_device::vlt_update)
 			sl = (lines / 2) + (m_row_line / 2);
 		m_write_sl(sl & 0x0f);
 	}
-	else if (m_paint_attr && (m_row_line + 1 < lines))
+	else if (m_paint_attr && (m_row_line + 1 < m_row_end))
 	{
 		// CURS marks each following scan line of a double height/width row,
 		// 3 CCLK after the VLT trailing edge for 1 CCLK

@@ -110,6 +110,8 @@ private:
 	void start_single_row_data();
 
 	inline void recompute_cursor();
+	inline unsigned row_first_line(unsigned row) const;
+	inline unsigned row_end_line(unsigned row) const;
 	inline void recompute_parameters();
 
 	// address space configurations
@@ -181,6 +183,15 @@ private:
 	uint8_t m_pending_attr;
 	uint8_t m_paint_attr;
 	uint8_t m_row_line;
+	uint8_t m_row_end;
+
+	// smooth scroll, as latched for the frame
+	uint8_t m_drb_row;
+	uint8_t m_paint_row;
+	uint8_t m_scroll_offset;
+	bool m_scroll_overflow;
+	uint8_t m_scroll_start;
+	uint8_t m_scroll_end;
 
 	// timers
 	emu_timer *m_vsync_timer;
