@@ -870,7 +870,8 @@ void lk201_device::sci_w(offs_t offset, uint8_t data)
 //          printf("LK201: sending %02x\n", data);
 			// the transmit data register is double buffered: it moves to the shift
 			// register when that is idle, emptying again, or waits for the byte
-			// being sent (a write while it is still full replaces it)
+			// being sent (a write while it is still full replaces it); TDRE is set
+			// at once here, where the chip sets it as the byte moves (not modelled)
 			sci_status &= ~SCSR_TC;
 			if (is_transmit_register_empty())
 			{
