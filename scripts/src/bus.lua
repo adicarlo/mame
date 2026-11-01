@@ -2412,6 +2412,20 @@ end
 
 ---------------------------------------------------
 --
+--@src/devices/bus/epson_qx/video/video.h,BUSES["EPSON_QX_VIDEO"] = true
+---------------------------------------------------
+
+if BUSES["EPSON_QX_VIDEO"] then
+	files {
+		MAME_DIR .. "src/devices/bus/epson_qx/video/qx_gdc_cards.cpp",
+		MAME_DIR .. "src/devices/bus/epson_qx/video/qx_gdc_cards.h",
+		MAME_DIR .. "src/devices/bus/epson_qx/video/video.cpp",
+		MAME_DIR .. "src/devices/bus/epson_qx/video/video.h",
+	}
+end
+
+---------------------------------------------------
+--
 --@src/devices/bus/epson_sio/epson_sio.h,BUSES["EPSON_SIO"] = true
 ---------------------------------------------------
 if BUSES["EPSON_SIO"] then
@@ -3425,8 +3439,6 @@ if BUSES["LPCI"] then
 		MAME_DIR .. "src/devices/bus/lpci/northbridge.h",
 		MAME_DIR .. "src/devices/bus/lpci/southbridge.cpp",
 		MAME_DIR .. "src/devices/bus/lpci/southbridge.h",
-		MAME_DIR .. "src/devices/bus/lpci/mpc105.cpp",
-		MAME_DIR .. "src/devices/bus/lpci/mpc105.h",
 		MAME_DIR .. "src/devices/bus/lpci/vt82c505.cpp",
 		MAME_DIR .. "src/devices/bus/lpci/vt82c505.h",
 	}
@@ -4780,6 +4792,8 @@ if BUSES["PCI"] then
 		MAME_DIR .. "src/devices/bus/pci/geforce.h",
 		MAME_DIR .. "src/devices/bus/pci/mga2064w.cpp",
 		MAME_DIR .. "src/devices/bus/pci/mga2064w.h",
+		MAME_DIR .. "src/devices/bus/pci/ncr53c810.cpp",
+		MAME_DIR .. "src/devices/bus/pci/ncr53c810.h",
 		MAME_DIR .. "src/devices/bus/pci/ncr53c825.cpp",
 		MAME_DIR .. "src/devices/bus/pci/ncr53c825.h",
 		MAME_DIR .. "src/devices/bus/pci/neon250.cpp",
