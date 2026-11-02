@@ -47,6 +47,7 @@
 #define LOG_REGS    (1U << 2)
 #define LOG_CONF    (1U << 3)
 #define LOG_RAW     (1U << 4) // a set_raw friendly version of CONF
+#define LOG_RESET   (1U << 5)
 
 //#define VERBOSE (LOG_SETUP|LOG_CONF|LOG_REGS)
 //#define LOG_OUTPUT_FUNC osd_printf_info
@@ -57,6 +58,7 @@
 #define LOGREGS(...)    LOGMASKED(LOG_REGS,  __VA_ARGS__)
 #define LOGCONF(...)    LOGMASKED(LOG_CONF,  __VA_ARGS__)
 #define LOGRAW(...)     LOGMASKED(LOG_RAW,  __VA_ARGS__)
+#define LOGRESET(...)   LOGMASKED(LOG_RESET,  __VA_ARGS__)
 
 DEFINE_DEVICE_TYPE(MC6845,   mc6845_device,   "mc6845",   "Motorola MC6845 CRTC")
 DEFINE_DEVICE_TYPE(MC6845_1, mc6845_1_device, "mc6845_1", "Motorola MC6845-1 CRTC")
@@ -87,6 +89,7 @@ mc6845_device::mc6845_device(const machine_config &mconfig, device_type type, co
 	, m_line_counter_mask(0x7f)
 	, m_interlace_fields(false)
 	, m_latch_row_end(false)
+	, m_reset_held(false)
 	, m_line_timer(nullptr)
 	, m_show_border_area(true)
 	, m_noninterlace_adjust(0)
@@ -424,6 +427,10 @@ void mc6845_device::recompute_parameters(bool postload)
 
 void mc6845_device::update_counters()
 {
+	// held in reset, the counters stay cleared
+	if (m_reset_held)
+		return;
+
 	m_character_counter = attotime_to_cclks(m_line_timer->elapsed());
 
 	if (m_hsync_off_timer->enabled())
@@ -655,21 +662,9 @@ TIMER_CALLBACK_MEMBER(mc6845_device::handle_line_timer)
 		/* Check if we have reached the end of a full cycle */
 		if (m_adjust_counter == m_vert_total_adj)
 		{
-			m_adjust_active = 0;
 			m_field = field_raster ? (m_field ^ 1) : 0;
-			m_raster_counter = m_field;
-			m_line_counter = 0;
-			m_line_address = m_disp_start_addr;
-			m_line_enable_ff = true;
-
-			if (m_supports_vert_sync_width)
-			{
-				if (match_line())
-					new_vsync = true;
-			}
-
-			/* also update the cursor state now */
-			update_cursor_state();
+			if (begin_frame())
+				new_vsync = true;
 
 			frame_start();
 		}
@@ -683,8 +678,24 @@ TIMER_CALLBACK_MEMBER(mc6845_device::handle_line_timer)
 }
 
 
-/* begin the line the counters now describe: schedule its DE, cursor and
-   HSYNC edges and the end-of-line callback */
+// the first line of a frame, at the end of the last one or on RESET release:
+// reload the start address and update the cursor; true if VSYNC begins here
+bool mc6845_device::begin_frame()
+{
+	m_adjust_active = 0;
+	m_raster_counter = m_field;
+	m_line_counter = 0;
+	m_line_address = m_disp_start_addr;
+	m_line_enable_ff = true;
+
+	update_cursor_state();
+
+	return m_supports_vert_sync_width && match_line();
+}
+
+
+// begin the line the counters now describe: schedule its DE, cursor and
+// HSYNC edges and the end-of-line callback
 void mc6845_device::start_line(bool new_vsync)
 {
 	if (m_line_enable_ff)
@@ -712,6 +723,8 @@ void mc6845_device::start_line(bool new_vsync)
 
 	/* Set VSYNC and DE signals */
 	set_vsync(new_vsync);
+	if (m_reset_held) // the VSYNC callback asserted RESET
+		return;
 	set_de(m_line_enable_ff ? true : false);
 }
 
@@ -723,10 +736,10 @@ TIMER_CALLBACK_MEMBER(mc6845_device::de_off_tick)
 
 TIMER_CALLBACK_MEMBER(mc6845_device::cursor_on)
 {
-	set_cur(true);
-
-	/* Schedule CURSOR off signal */
+	// schedule CURSOR off before the callback, which may assert RESET
 	m_cursor_off_timer->adjust(cclks_to_attotime(1));
+
+	set_cur(true);
 }
 
 TIMER_CALLBACK_MEMBER(mc6845_device::cursor_off)
@@ -739,10 +752,11 @@ TIMER_CALLBACK_MEMBER(mc6845_device::hsync_on)
 	uint8_t hsync_width = (m_sync_width & 0x0f) ? (m_sync_width & 0x0f) : 0x10;
 
 	m_hsync_width_counter = 0;
-	set_hsync(true);
 
-	/* Schedule HSYNC off signal */
+	// schedule HSYNC off before the callback, which may assert RESET
 	m_hsync_off_timer->adjust(cclks_to_attotime(hsync_width));
+
+	set_hsync(true);
 }
 
 TIMER_CALLBACK_MEMBER(mc6845_device::hsync_off)
@@ -799,35 +813,58 @@ void mc6845_device::reset_w(int state)
 	if (held == m_reset_held)
 		return;
 	m_reset_held = held;
+	LOGRESET("%s: RESET %s\n", machine().describe_context(), held ? "held" : "released");
+
+	if (!started())
+		return;
 
 	if (held)
 	{
-		/* the counters stop and every output goes low until release */
+		// every counter, the blink counter included, stops and clears, and
+		// every output goes low; the registers are kept.  Not modelled for
+		// the MOS 8563's own draw counters.
 		m_line_timer->adjust(attotime::never);
 		m_de_off_timer->adjust(attotime::never);
 		m_cursor_on_timer->adjust(attotime::never);
 		m_cursor_off_timer->adjust(attotime::never);
 		m_hsync_on_timer->adjust(attotime::never);
 		m_hsync_off_timer->adjust(attotime::never);
+		m_character_counter = 0;
+		m_hsync_width_counter = 0;
+		m_raster_counter = 0;
+		m_line_counter = 0;
+		m_line_address = 0;
+		m_adjust_counter = 0;
+		m_adjust_active = 0;
+		m_vsync_width_counter = 0;
 		m_vsync_ff = 0;
+		m_field = 0;
+		m_cursor_blink_count = 0;
+		m_cursor_state = false;
+		m_cursor_x = -1;
+
+		// state first, then the callbacks, which may act on it; stop if one
+		// releases RESET, which has then started a line
 		set_hsync(false);
-		set_vsync(false);
+		if (!m_reset_held)
+			return;
+		if (m_vsync) // the MOS 8563's set_vsync counts every call
+			set_vsync(false);
+		if (!m_reset_held)
+			return;
 		set_cur(false);
+		if (!m_reset_held)
+			return;
 		set_de(false);
 	}
 	else if (m_has_valid_parameters)
 	{
-		/* release starts a frame: restart at its first line, and update
-		   the cursor as a frame start does (the blink counter carries on) */
-		m_character_counter = 0;
-		m_cursor_x = -1;
-		m_raster_counter = 0;
-		m_line_counter = 0;
-		m_adjust_active = 0;
-		m_line_address = m_disp_start_addr;
-		m_line_enable_ff = true;
-		update_cursor_state();
-		start_line(match_line());
+		// scan timing starts at the first line of a frame (R6545-1, SY6545).
+		// DE starts at once, though the MC6845 sheet holds DE and CURSOR off
+		// until a frame has been displayed.  frame_start() is skipped: it
+		// moves the screen origin, which a CRTC reset every row would do
+		// every row.
+		start_line(begin_frame());
 	}
 }
 
@@ -1074,7 +1111,6 @@ void mc6845_device::device_start()
 	m_cursor_state = 0;
 	m_update_ready_bit = 0;
 	m_line_address = 0;
-	m_reset_held = false;
 	m_current_disp_addr = 0;
 	m_disp_start_addr = 0;
 	m_noninterlace_adjust = 1;
