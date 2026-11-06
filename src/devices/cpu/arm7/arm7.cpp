@@ -157,6 +157,8 @@ arm7_cpu_device::arm7_cpu_device(
 	, m_drc_tlb(nullptr)
 	, m_drc_tlb_size(DRC_TLB_SIZE)
 	, m_drc_tlb_base(nullptr)
+	, m_drc_control_next(~offs_t(0))
+	, m_drc_control_words{ 0, 0 }
 	, m_drc_prefetched(false)
 	, m_drc_cache_dirty(true)
 	, m_drc_fastram_stale(true)
@@ -166,12 +168,17 @@ arm7_cpu_device::arm7_cpu_device(
 	, m_entry_exact(nullptr)
 	, m_nocode(nullptr)
 	, m_nocode_verify(nullptr)
+	, m_nocode_window(nullptr)
+	, m_nocode_verify_window(nullptr)
 	, m_nocode_miss(nullptr)
 	, m_nocode_exact(nullptr)
 	, m_nocode_literal(nullptr)
 	, m_out_of_cycles(nullptr)
+	, m_out_of_cycles_window(nullptr)
 	, m_resync(nullptr)
+	, m_resync_window(nullptr)
 	, m_resync_next(nullptr)
+	, m_resync_next_window(nullptr)
 	, m_slice_exact(nullptr)
 	, m_shift_reg{ }
 	, m_read8{ }
