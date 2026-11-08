@@ -21,6 +21,7 @@ pseudo_terminal_device::pseudo_terminal_device(const machine_config &mconfig, co
 	m_input_char(0),
 	m_input_pending(false),
 	m_timer_poll(nullptr),
+	m_poll_period(attotime::never),
 	m_rts(0),
 	m_dtr(0),
 	m_xoff(0)
@@ -38,6 +39,10 @@ void pseudo_terminal_device::update_serial(int state)
 
 	int txbaud = convert_baud(m_rs232_txbaud->read());
 	set_tra_rate(txbaud);
+
+	// look for the next character once per frame: it can't be sent any sooner
+	int const framebits = startbits + databits + ((parity != PARITY_NONE) ? 1 : 0) + ((stopbits >= STOP_BITS_1_5) ? 2 : 1);
+	m_poll_period = attotime::from_hz(txbaud) * framebits;
 
 	int rxbaud = convert_baud(m_rs232_rxbaud->read());
 	set_rcv_rate(rxbaud);
@@ -150,8 +155,7 @@ TIMER_CALLBACK_MEMBER(pseudo_terminal_device::update_queue)
 			}
 		}
 
-		int const txbaud = convert_baud(m_rs232_txbaud->read());
-		m_timer_poll->adjust(attotime::from_hz(txbaud));
+		m_timer_poll->adjust(m_poll_period);
 	}
 }
 

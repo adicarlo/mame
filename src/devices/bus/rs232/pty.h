@@ -44,6 +44,7 @@ private:
 	uint8_t m_input_char;
 	bool m_input_pending;
 	emu_timer *m_timer_poll;
+	attotime m_poll_period;
 	int m_rts;
 	int m_dtr;
 	int m_xoff;
