@@ -10,12 +10,14 @@
 
 #include "posixfile.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cerrno>
 #include <cstring>
 
 #include <fcntl.h>
 #include <climits>
+#include <sys/ioctl.h>
 #include <unistd.h>
 #include <cstdlib>
 
@@ -49,7 +51,7 @@ public:
 	posix_osd_ptty& operator=(posix_osd_ptty const &) = delete;
 	posix_osd_ptty& operator=(posix_osd_ptty &&) = delete;
 
-	posix_osd_ptty(int fd) noexcept : m_fd(fd)
+	posix_osd_ptty(int fd, bool packet) noexcept : m_fd(fd), m_packet(packet), m_stopped(false)
 	{
 		assert(m_fd >= 0);
 	}
@@ -61,11 +63,45 @@ public:
 
 	virtual std::error_condition read(void *buffer, std::uint64_t offset, std::uint32_t count, std::uint32_t &actual) noexcept override
 	{
-		ssize_t const result = ::read(m_fd, buffer, count);
+		if (!m_packet)
+		{
+			ssize_t const result = ::read(m_fd, buffer, count);
+			if (result < 0)
+				return std::error_condition(errno, std::generic_category());
+
+			actual = std::uint32_t(size_t(result));
+			return std::error_condition();
+		}
+
+#if defined(TIOCPKT)
+		// In packet mode a read returns a status byte on its own, or a zero byte followed by
+		// data.  While the slave's own flow control (IXON) has its output stopped, hold back
+		// what it wrote before stopping, as a serial port stops sending: a one-byte read
+		// takes a pending status, or only the zero byte, leaving the data queued.
+		std::uint8_t packet[1 + 256];
+		std::size_t const length(m_stopped ? 1 : (1 + std::min<std::size_t>(count, sizeof(packet) - 1)));
+		ssize_t const result = ::read(m_fd, packet, length);
 		if (result < 0)
 			return std::error_condition(errno, std::generic_category());
 
-		actual = std::uint32_t(size_t(result));
+		actual = 0;
+		if (result > 0)
+		{
+			if (packet[0] == TIOCPKT_DATA)
+			{
+				actual = std::uint32_t(size_t(result) - 1);
+				std::memcpy(buffer, &packet[1], actual);
+			}
+			else if (packet[0] & TIOCPKT_STOP)
+			{
+				m_stopped = true;
+			}
+			else if (packet[0] & TIOCPKT_START)
+			{
+				m_stopped = false;
+			}
+		}
+#endif
 		return std::error_condition();
 	}
 
@@ -93,6 +129,8 @@ public:
 
 private:
 	int m_fd;
+	bool m_packet;      // master is in packet mode
+	bool m_stopped;     // slave output stopped by its flow control
 };
 
 } // anonymous namespace
@@ -200,10 +238,18 @@ std::error_condition posix_open_ptty(std::uint32_t openflags, osd_file::ptr &fil
 		return err;
 	}
 
+	// packet mode reports the slave's flow control stopping and starting its output; carry
+	// on without it where it isn't supported
+	bool packet = false;
+#if defined(TIOCPKT)
+	int const on = 1;
+	packet = ::ioctl(masterfd, TIOCPKT, &on) == 0;
+#endif
+
 	try
 	{
 		name = slavepath;
-		file = std::make_unique<posix_osd_ptty>(masterfd);
+		file = std::make_unique<posix_osd_ptty>(masterfd, packet);
 		filesize = 0;
 		return std::error_condition();
 	}
