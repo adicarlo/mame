@@ -41,9 +41,8 @@ private:
 	required_ioport m_rs232_stopbits;
 	required_ioport m_flow;
 
-	uint8_t m_input_buffer[1024];
-	uint32_t m_input_count;
-	uint32_t m_input_index;
+	uint8_t m_input_char;
+	bool m_input_pending;
 	emu_timer *m_timer_poll;
 	int m_rts;
 	int m_dtr;

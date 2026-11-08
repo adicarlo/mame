@@ -18,8 +18,8 @@ pseudo_terminal_device::pseudo_terminal_device(const machine_config &mconfig, co
 	m_rs232_parity(*this, "RS232_PARITY"),
 	m_rs232_stopbits(*this, "RS232_STOPBITS"),
 	m_flow(*this, "FLOW_CONTROL"),
-	m_input_count(0),
-	m_input_index(0),
+	m_input_char(0),
+	m_input_pending(false),
 	m_timer_poll(nullptr),
 	m_rts(0),
 	m_dtr(0),
@@ -132,23 +132,19 @@ TIMER_CALLBACK_MEMBER(pseudo_terminal_device::update_queue)
 {
 	if (is_transmit_register_empty())
 	{
-		if (m_input_index == m_input_count)
-		{
-			m_input_index = 0;
-			int const tmp = read(m_input_buffer, sizeof(m_input_buffer));
-			if (tmp > 0)
-				m_input_count = tmp;
-			else
-				m_input_count = 0;
-		}
+		// take one character at a time: what the host has written stays in the pty until
+		// it's sent, where the host tty's own flow control (IXON) can hold it back
+		if (!m_input_pending)
+			m_input_pending = read(&m_input_char, 1) == 1;
 
-		if (m_input_count != 0)
+		if (m_input_pending)
 		{
 			uint8_t const fc = m_flow->read();
 
 			if (fc == 0 || (fc == 1 && m_rts == 0) || (fc == 2 && m_dtr == 0) || (fc == 4 && m_xoff == 0))
 			{
-				transmit_register_setup(m_input_buffer[m_input_index++]);
+				m_input_pending = false;
+				transmit_register_setup(m_input_char);
 				m_timer_poll->adjust(attotime::never);
 				return;
 			}
