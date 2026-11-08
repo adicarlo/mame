@@ -33,16 +33,16 @@
 #include <bsd/pty.h>
 #endif
 
-
-namespace {
-
 // Linux keeps passing what the slave wrote to the master after the slave's own flow control
 // (IXON) stops its output, so a terminal's XOFF has no effect on data already queued (about
-// 20 KB).  Packet mode reports the stop, so that data can be held back here.  FreeBSD and
-// OpenBSD hold it back in the kernel, and OpenBSD doesn't report every restart.
+// 20 KB on Linux 7.1).  Packet mode reports the stop, so that data can be held back here.
+// FreeBSD and OpenBSD hold it back in the kernel, and OpenBSD doesn't report every restart.
 #if defined(__linux__) && defined(TIOCPKT)
 #define POSIX_PTTY_PACKET 1
 #endif
+
+
+namespace {
 
 #if defined(__APPLE__)
 char const *const posix_ptty_identifier  = "/dev/pty";
@@ -120,9 +120,8 @@ private:
 	{
 		// A read returns a status byte on its own, or a zero byte followed by data.  While
 		// stopped, read one byte: that takes a pending status, or only the zero byte, leaving
-		// the data queued.  A status byte can carry several flags (STOP comes with the flush
-		// flags on some kernels, START with NOSTOP when IXON is turned off); only STOP and
-		// START matter here.
+		// the data queued.  A status byte can carry several flags (START comes with NOSTOP
+		// when IXON is turned off while stopped); only STOP and START matter here.
 		actual = 0;
 		if (!count)
 			return std::error_condition();

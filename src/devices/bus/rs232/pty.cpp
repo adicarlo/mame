@@ -40,9 +40,13 @@ void pseudo_terminal_device::update_serial(int state)
 	int txbaud = convert_baud(m_rs232_txbaud->read());
 	set_tra_rate(txbaud);
 
-	// look for the next character once per frame: it can't be sent any sooner
-	int const framebits = startbits + databits + ((parity != PARITY_NONE) ? 1 : 0) + ((stopbits >= STOP_BITS_1_5) ? 2 : 1);
+	// look for the next character once per frame: it can't be sent any sooner (1.5 stop
+	// bits are sent as 2, as diserial does)
+	int const stopcount = (stopbits == STOP_BITS_0) ? 0 : (stopbits == STOP_BITS_1) ? 1 : 2;
+	int const framebits = startbits + databits + ((parity != PARITY_NONE) ? 1 : 0) + stopcount;
 	m_poll_period = attotime::from_hz(txbaud) * framebits;
+	if (m_timer_poll && m_timer_poll->enabled() && !m_timer_poll->expire().is_never())
+		m_timer_poll->adjust(m_poll_period);
 
 	int rxbaud = convert_baud(m_rs232_rxbaud->read());
 	set_rcv_rate(rxbaud);
