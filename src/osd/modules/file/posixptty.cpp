@@ -36,6 +36,14 @@
 
 namespace {
 
+// Linux keeps passing what the slave wrote to the master after the slave's own flow control
+// (IXON) stops its output, so a terminal's XOFF has no effect on data already queued (about
+// 20 KB).  Packet mode reports the stop, so that data can be held back here.  FreeBSD and
+// OpenBSD hold it back in the kernel, and OpenBSD doesn't report every restart.
+#if defined(__linux__) && defined(TIOCPKT)
+#define POSIX_PTTY_PACKET 1
+#endif
+
 #if defined(__APPLE__)
 char const *const posix_ptty_identifier  = "/dev/pty";
 #else
@@ -51,9 +59,14 @@ public:
 	posix_osd_ptty& operator=(posix_osd_ptty const &) = delete;
 	posix_osd_ptty& operator=(posix_osd_ptty &&) = delete;
 
-	posix_osd_ptty(int fd, bool packet) noexcept : m_fd(fd), m_packet(packet), m_stopped(false)
+	posix_osd_ptty(int fd) noexcept : m_fd(fd)
 	{
 		assert(m_fd >= 0);
+#if defined(POSIX_PTTY_PACKET)
+		// carry on without packet mode if it can't be had
+		int const on = 1;
+		m_packet = ::ioctl(m_fd, TIOCPKT, &on) == 0;
+#endif
 	}
 
 	virtual ~posix_osd_ptty()
@@ -63,45 +76,16 @@ public:
 
 	virtual std::error_condition read(void *buffer, std::uint64_t offset, std::uint32_t count, std::uint32_t &actual) noexcept override
 	{
-		if (!m_packet)
-		{
-			ssize_t const result = ::read(m_fd, buffer, count);
-			if (result < 0)
-				return std::error_condition(errno, std::generic_category());
+#if defined(POSIX_PTTY_PACKET)
+		if (m_packet)
+			return read_packet(buffer, count, actual);
+#endif
 
-			actual = std::uint32_t(size_t(result));
-			return std::error_condition();
-		}
-
-#if defined(TIOCPKT)
-		// In packet mode a read returns a status byte on its own, or a zero byte followed by
-		// data.  While the slave's own flow control (IXON) has its output stopped, hold back
-		// what it wrote before stopping, as a serial port stops sending: a one-byte read
-		// takes a pending status, or only the zero byte, leaving the data queued.
-		std::uint8_t packet[1 + 256];
-		std::size_t const length(m_stopped ? 1 : (1 + std::min<std::size_t>(count, sizeof(packet) - 1)));
-		ssize_t const result = ::read(m_fd, packet, length);
+		ssize_t const result = ::read(m_fd, buffer, count);
 		if (result < 0)
 			return std::error_condition(errno, std::generic_category());
 
-		actual = 0;
-		if (result > 0)
-		{
-			if (packet[0] == TIOCPKT_DATA)
-			{
-				actual = std::uint32_t(size_t(result) - 1);
-				std::memcpy(buffer, &packet[1], actual);
-			}
-			else if (packet[0] & TIOCPKT_STOP)
-			{
-				m_stopped = true;
-			}
-			else if (packet[0] & TIOCPKT_START)
-			{
-				m_stopped = false;
-			}
-		}
-#endif
+		actual = std::uint32_t(size_t(result));
 		return std::error_condition();
 	}
 
@@ -128,9 +112,51 @@ public:
 	}
 
 private:
+#if defined(POSIX_PTTY_PACKET)
+	// data taken per read; callers accept short reads
+	static constexpr std::size_t PACKET_DATA_MAX = 256;
+
+	std::error_condition read_packet(void *buffer, std::uint32_t count, std::uint32_t &actual) noexcept
+	{
+		// A read returns a status byte on its own, or a zero byte followed by data.  While
+		// stopped, read one byte: that takes a pending status, or only the zero byte, leaving
+		// the data queued.  A status byte can carry several flags (STOP comes with the flush
+		// flags on some kernels, START with NOSTOP when IXON is turned off); only STOP and
+		// START matter here.
+		actual = 0;
+		if (!count)
+			return std::error_condition();
+
+		std::uint8_t packet[1 + PACKET_DATA_MAX];
+		std::size_t const length(m_stopped ? 1 : (1 + std::min<std::size_t>(count, PACKET_DATA_MAX)));
+		ssize_t const result = ::read(m_fd, packet, length);
+		if (result < 0)
+			return std::error_condition(errno, std::generic_category());
+
+		if (!result)
+			return std::error_condition();
+		if (packet[0] == TIOCPKT_DATA)
+		{
+			actual = std::uint32_t(std::size_t(result) - 1);
+			std::memcpy(buffer, &packet[1], actual);
+		}
+		else if (packet[0] & TIOCPKT_STOP)
+		{
+			m_stopped = true;
+		}
+		else if (packet[0] & TIOCPKT_START)
+		{
+			m_stopped = false;
+		}
+		return std::error_condition();
+	}
+#endif
+
 	int m_fd;
-	bool m_packet;      // master is in packet mode
-	bool m_stopped;     // slave output stopped by its flow control
+#if defined(POSIX_PTTY_PACKET)
+	bool m_packet = false;      // master is in packet mode
+	bool m_stopped = false;     // slave output stopped by its flow control
+#endif
 };
 
 } // anonymous namespace
@@ -238,18 +264,10 @@ std::error_condition posix_open_ptty(std::uint32_t openflags, osd_file::ptr &fil
 		return err;
 	}
 
-	// packet mode reports the slave's flow control stopping and starting its output; carry
-	// on without it where it isn't supported
-	bool packet = false;
-#if defined(TIOCPKT)
-	int const on = 1;
-	packet = ::ioctl(masterfd, TIOCPKT, &on) == 0;
-#endif
-
 	try
 	{
 		name = slavepath;
-		file = std::make_unique<posix_osd_ptty>(masterfd, packet);
+		file = std::make_unique<posix_osd_ptty>(masterfd);
 		filesize = 0;
 		return std::error_condition();
 	}
