@@ -117,8 +117,9 @@ private:
 	{
 		// A read returns a status byte on its own, or a zero byte followed by data.  While
 		// stopped, read one byte: that takes a pending status, or only the zero byte, leaving
-		// the data queued.  A status byte can carry several flags (START comes with NOSTOP
-		// when IXON is turned off while stopped); only STOP and START matter here.
+		// the data queued (how Linux behaves; the man page doesn't promise it).  A status byte
+		// can carry several flags (START comes with NOSTOP when IXON is turned off while
+		// stopped); only STOP and START matter here.
 		actual = 0;
 		if (!count)
 			return std::error_condition();

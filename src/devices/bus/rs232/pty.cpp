@@ -40,8 +40,8 @@ void pseudo_terminal_device::update_serial(int state)
 	int txbaud = convert_baud(m_rs232_txbaud->read());
 	set_tra_rate(txbaud);
 
-	// look for the next character about once per frame; a rate change aborts any character
-	// being sent, so the poll always restarts here
+	// look for the next character about once per frame (10 bit times); a rate change aborts
+	// any character being sent, so the poll always restarts here
 	m_poll_period = attotime::from_hz(txbaud) * 10;
 	m_timer_poll->adjust(m_poll_period);
 
