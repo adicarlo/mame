@@ -10,7 +10,6 @@
 
 #include "posixfile.h"
 
-#include <algorithm>
 #include <cassert>
 #include <cerrno>
 #include <cstring>
@@ -18,6 +17,7 @@
 #include <fcntl.h>
 #include <climits>
 #include <sys/ioctl.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #include <cstdlib>
 
@@ -114,8 +114,6 @@ public:
 private:
 #if defined(POSIX_PTTY_PACKET)
 	// data taken per read; callers accept short reads
-	static constexpr std::size_t PACKET_DATA_MAX = 256;
-
 	std::error_condition read_packet(void *buffer, std::uint32_t count, std::uint32_t &actual) noexcept
 	{
 		// A read returns a status byte on its own, or a zero byte followed by data.  While
@@ -126,24 +124,23 @@ private:
 		if (!count)
 			return std::error_condition();
 
-		std::uint8_t packet[1 + PACKET_DATA_MAX];
-		std::size_t const length(m_stopped ? 1 : (1 + std::min<std::size_t>(count, PACKET_DATA_MAX)));
-		ssize_t const result = ::read(m_fd, packet, length);
+		std::uint8_t header;
+		iovec const iov[2] = { { &header, 1 }, { buffer, count } };
+		ssize_t const result = ::readv(m_fd, iov, m_stopped ? 1 : 2);
 		if (result < 0)
 			return std::error_condition(errno, std::generic_category());
 
 		if (!result)
 			return std::error_condition();
-		if (packet[0] == TIOCPKT_DATA)
+		if (header == TIOCPKT_DATA)
 		{
 			actual = std::uint32_t(std::size_t(result) - 1);
-			std::memcpy(buffer, &packet[1], actual);
 		}
-		else if (packet[0] & TIOCPKT_STOP)
+		else if (header & TIOCPKT_STOP)
 		{
 			m_stopped = true;
 		}
-		else if (packet[0] & TIOCPKT_START)
+		else if (header & TIOCPKT_START)
 		{
 			m_stopped = false;
 		}
