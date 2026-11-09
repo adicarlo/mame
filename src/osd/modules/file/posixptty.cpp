@@ -16,8 +16,6 @@
 
 #include <fcntl.h>
 #include <climits>
-#include <sys/ioctl.h>
-#include <sys/uio.h>
 #include <unistd.h>
 #include <cstdlib>
 
@@ -29,13 +27,15 @@
 #include <util.h>
 #elif defined(__linux__) || defined(__EMSCRIPTEN__)
 #include <pty.h>
+#include <sys/ioctl.h>
+#include <sys/uio.h>
 #elif defined(__HAIKU__)
 #include <bsd/pty.h>
 #endif
 
 // Linux keeps passing what the slave wrote to the master after the slave's own flow control
-// (IXON) stops its output, so a terminal's XOFF has no effect on data already queued (about
-// 20 KB on Linux 7.1).  Packet mode reports the stop, so that data can be held back here.
+// (IXON) stops its output, so a terminal's XOFF has no effect on data already queued.  Packet
+// mode reports the stop, so that data can be held back here.
 // FreeBSD and OpenBSD hold it back in the kernel, and OpenBSD doesn't report every restart.
 #if defined(__linux__) && defined(TIOCPKT)
 #define POSIX_PTTY_PACKET 1
@@ -113,7 +113,6 @@ public:
 
 private:
 #if defined(POSIX_PTTY_PACKET)
-	// data taken per read; callers accept short reads
 	std::error_condition read_packet(void *buffer, std::uint32_t count, std::uint32_t &actual) noexcept
 	{
 		// A read returns a status byte on its own, or a zero byte followed by data.  While
@@ -150,8 +149,8 @@ private:
 
 	int m_fd;
 #if defined(POSIX_PTTY_PACKET)
-	bool m_packet = false;      // master is in packet mode
-	bool m_stopped = false;     // slave output stopped by its flow control
+	bool m_packet = false; // master is in packet mode
+	bool m_stopped = false; // slave output stopped by its flow control
 #endif
 };
 
