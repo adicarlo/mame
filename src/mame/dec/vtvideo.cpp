@@ -412,8 +412,11 @@ void vt100_video_device::video_update(bitmap_ind16 &bitmap, const rectangle &cli
 			// display regular char
 			if (line >= fill_lines)
 			{
+				// AVO attribute bits (low active): 0 blink, 1 underline, 2 bold,
+				// 3 ALT CHAR SET, which switches E4 out for the alternate ROM E9
 				uint8_t attr = m_read_ram(0x1000 + addr + xpos);
-				display_char(bitmap, code & 0x7f, xpos, ypos, scroll_region, display_type, BIT(code, 7), !BIT(attr, 2), !BIT(attr, 0), !BIT(attr, 1), false);
+				uint8_t const set = BIT(attr, 3) ? 0x00 : 0x80;
+				display_char(bitmap, set | (code & 0x7f), xpos, ypos, scroll_region, display_type, BIT(code, 7), !BIT(attr, 2), !BIT(attr, 0), !BIT(attr, 1), false);
 			}
 			xpos++;
 			if (xpos > m_columns)
