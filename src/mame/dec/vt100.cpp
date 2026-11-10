@@ -697,16 +697,17 @@ void vt100_state::vt102(machine_config &config)
 
  * The AVO itself can hold up to four ROMs on it (see http://www.bitsavers.org/pdf/dec/terminal/vt100/MP00633_VT100_Mar80.pdf
    and http://vt100.net/dec/ek-vt1ac-ug-002.pdf )
-   and these ROMs can depending on jumpers be mapped at 0x8000, OR overlay the main code ROMs at 0x0000-0x1fff!
-   They may even allow banking between the main code ROMs and the overlay ROMs, I haven't traced the schematic.
+   Jumpers place them at 8000-BFFF or over the main code ROMs at 0000-1FFF; there is no banking
+   (see vt100_avo.cpp).  Sockets E21, E17, E13, E8 (2K each; E8 also takes an 8K ROM).
    At least sixteen of these AVO ROMs were made, and are used as such:
    (based on EK-VT100-TM-003_VT100_Technical_Manual_Jul82.pdf)
  * No ROMs - normal vt100 system with AVO installed
  * 23-069E2 (location e21) - meant for vt100-wa and -wb 'LA120' 'word processing' systems (the mapping of the ROM for this system is different than for the ones below)
  * 23-099E2 (location e21) and 23-100E2 (location e17) - meant for vt132 but only with the OLD vt132 main ROMset of 095,096,097,098E2
  * 23-093E2 (location e21) - meant for vt100 wc through wz 'foreign language' word processing systems
- * 23-184E2 and 23-185E2 - meant for vt100 with STP printer option board installed, version 1, comes with vt1xx-ac kit
- * 23-186E2 and 23-187E2 - meant for vt100 with STP printer option board installed, version 2, comes with vt1xx-ac kit
+   (TM table 5-9 lists 23-152E2 for wc-wk; the AVO schematic legend lists 23-093E2)
+ * 23-184E2 and 23-185E2 - listed with the vt100-wx set below (vt100wp); TM table 5-9 also gives 23-185E2 as vt1xx-ac ROM B
+ * 23-284E2 or 23-186E2 (e21), 23-185E2 or 23-187E2 (e17) - vt100 with the STP printer option, vt1xx-ac kit (TM table 5-9)
  * 23-224E2, 23-225E2, 23-226E2, 23-227E2 - meant for vt132 but only with the NEW vt132 main ROMset of 180,181,182,183E2
  * 23-236E2, 23-237E2, 23-238E2, 23-239E2 - meant for vt132 but only with the NEW vt132 main ROMset of 180,181,182,183E2, unknown difference to above (PROM vs. mask ROM? same contents?)
  */
@@ -777,13 +778,13 @@ ROM_START( vt132 ) // This is from anecdotal evidence and vt100.net, as the vt13
 	// AVO ROMs for NEWER ROMset only
 	ROM_LOAD( "23-224e2-00.e21", 0x0000, 0x0800, NO_DUMP)
 	ROM_LOAD( "23-225e2-00.e17", 0x0800, 0x0800, NO_DUMP)
-	ROM_LOAD( "23-226e2-00.e15", 0x1000, 0x0800, NO_DUMP) // loc is a guess
-	ROM_LOAD( "23-227e2-00.e13", 0x1800, 0x0800, NO_DUMP) // loc is a guess
+	ROM_LOAD( "23-226e2-00.e13", 0x1000, 0x0800, NO_DUMP)
+	ROM_LOAD( "23-227e2-00.e8", 0x1800, 0x0800, NO_DUMP)
 	// alt rev of newer avo ROMs, tech manual implies above are PROMs below are mask ROMS? same data?
 	ROM_LOAD( "23-236e2-00.e21", 0x0000, 0x0800, NO_DUMP)
 	ROM_LOAD( "23-237e2-00.e17", 0x0800, 0x0800, NO_DUMP)
-	ROM_LOAD( "23-238e2-00.e15", 0x1000, 0x0800, NO_DUMP) // loc is a guess
-	ROM_LOAD( "23-239e2-00.e13", 0x1800, 0x0800, NO_DUMP) // loc is a guess
+	ROM_LOAD( "23-238e2-00.e13", 0x1000, 0x0800, NO_DUMP)
+	ROM_LOAD( "23-239e2-00.e8", 0x1800, 0x0800, NO_DUMP)
 
 	ROM_REGION(0x1000, "chargen", 0)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
