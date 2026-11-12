@@ -536,7 +536,11 @@ void vt100_state::vt101(machine_config &config)
 
 	config.device_remove("avo"); // no AVO connector; the VT102's is on the board
 
-	// no STP either: the 8251 goes straight to the communication port
+	// no STP either: the 8251 goes straight to the communication port.  The
+	// board's J3 is only the 20 mA adapter's TXD/RXD header (MP-01066 sheet
+	// 5); the VT101 has "no standard terminal port connector functions"
+	// (EK-VT101-UG-002 appendix F), and the VT18X can't go in any VT101,
+	// VT102 or VT131 (EK-VT18X-IN-002 table 1-1)
 	config.device_remove("stp");
 	config.device_remove("localclk");
 	m_pusart->txd_handler().set(m_rs232, FUNC(rs232_port_device::write_txd));
