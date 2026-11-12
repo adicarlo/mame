@@ -200,6 +200,7 @@ public:
 
 protected:
 	virtual void device_start() override ATTR_COLD;
+	virtual void device_reset() override ATTR_COLD;
 	virtual void device_add_mconfig(machine_config &config) override ATTR_COLD;
 	virtual const tiny_rom_entry *device_rom_region() const override ATTR_COLD;
 
@@ -305,8 +306,13 @@ void vt100_stp_ac_device::device_start()
 	m_line->write_cts(0);
 	m_local->write_cts(0);
 	m_prt->write_cts(0);
+}
 
-	// the printer connector's DTR is on whenever the terminal is
+void vt100_stp_ac_device::device_reset()
+{
+	// the printer connector's DTR is on whenever the terminal is.  Not in
+	// device_start: a device on the connector that answers DTR (a loopback
+	// plug) has not started yet then, and would never assert DSR
 	subdevice<rs232_port_device>("printer")->write_dtr(0);
 }
 
