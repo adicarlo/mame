@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE softwarelist SYSTEM "softwarelist.dtd">
+<!--
+license:CC0-1.0
+
+Raw dumps (40 tracks x 9 sectors x 512 bytes, single sided, system tracks
+included) from bitsavers pdf/dec/terminal/vt180/dskimage.  The VT180 driver
+does not emulate the VT18X floppy controller yet.
+-->
+
+<softwarelist name="vt180" description="DEC VT180 disk images">
+	<software name="cpm22" supported="no">
+		<description>CP/M 2.2 (BJ-M074B-BV)</description>
+		<year>198?</year>
+		<publisher>Digital Equipment Corporation</publisher>
+		<part name="flop1" interface="floppy_5_25">
+			<dataarea name="flop" size="184320">
+				<rom name="vt180cpm.img" size="184320" crc="17ae8ce6" sha1="e23bcb229c013bc59da8548f618780d26c356a94"/>
+			</dataarea>
+		</part>
+	</software>
+
+	<software name="vt18diag" supported="no">
+		<description>VT18X Diagnostic (BJ-T040B-MV)</description>
+		<year>1982</year>
+		<publisher>Digital Equipment Corporation</publisher>
+		<part name="flop1" interface="floppy_5_25">
+			<dataarea name="flop" size="184320">
+				<rom name="vt18diag.img" size="184320" crc="1ae2ac96" sha1="fb06b7d9b76c9a2f26f8d3c2124e34b353f0a024"/>
+			</dataarea>
+		</part>
+	</software>
+
+	<software name="mbasic" supported="no">
+		<description>MBASIC 5.21 (BJ-P227A-BV)</description>
+		<year>1981</year>
+		<publisher>Microsoft</publisher>
+		<part name="flop1" interface="floppy_5_25">
+			<dataarea name="flop" size="184320">
+				<rom name="mbasic.img" size="184320" crc="f6ff0af1" sha1="98786e16f6c3a8d499eddb018c76575053a15ba3"/>
+			</dataarea>
+		</part>
+	</software>
+
+	<software name="multipln" supported="no">
+		<description>Multiplan (BJ-P229A-BV)</description>
+		<year>1981</year>
+		<publisher>Microsoft</publisher>
+		<part name="flop1" interface="floppy_5_25">
+			<dataarea name="flop" size="184320">
+				<rom name="multipln.img" size="184320" crc="06814c73" sha1="33e48ebdfd56b8be3fa850065f2a83d0eb289c75"/>
+			</dataarea>
+		</part>
+	</software>
+
+	<software name="tpascal" supported="no">
+		<description>Turbo Pascal 3.01A</description>
+		<year>198?</year>
+		<publisher>Borland</publisher>
+		<part name="flop1" interface="floppy_5_25">
+			<dataarea name="flop" size="184320">
+				<rom name="tpascal.img" size="184320" crc="bb50eb96" sha1="6ce87dc8b6f0bb5b349d8e61a0a9dc7d3d59729d"/>
+			</dataarea>
+		</part>
+	</software>
+
+	<software name="kermit" supported="no">
+		<description>Kermit and communication utilities</description>
+		<year>198?</year>
+		<publisher>&lt;unknown&gt;</publisher>
+		<part name="flop1" interface="floppy_5_25">
+			<dataarea name="flop" size="184320">
+				<rom name="vtkermit.img" size="184320" crc="175b0f49" sha1="cff53646ab7abd2ae5b1be73ea57a7217644f3f5"/>
+			</dataarea>
+		</part>
+	</software>
+
+	<software name="select" supported="no">
+		<description>Select 2.30</description>
+		<year>1981</year>
+		<publisher>Select Information Systems</publisher>
+		<part name="flop1" interface="floppy_5_25">
+			<feature name="part_id" value="Master (BJ-P598B-RV)"/>
+			<dataarea name="flop" size="184320">
+				<rom name="select.img" size="184320" crc="865f6949" sha1="fde48b3fa5ba326fbe23a3ea4ddf854476f852ba"/>
+			</dataarea>
+		</part>
+		<part name="flop2" interface="floppy_5_25">
+			<feature name="part_id" value="SuperSpell (BJ-P599B-RV)"/>
+			<dataarea name="flop" size="184320">
+				<rom name="superspl.img" size="184320" crc="750461b3" sha1="5997b13480ca41dc6c1901239de622835ae6d82e"/>
+			</dataarea>
+		</part>
+		<part name="flop3" interface="floppy_5_25">
+			<feature name="part_id" value="Install/Teach (BJ-P600B-RV)"/>
+			<dataarea name="flop" size="184320">
+				<rom name="sinsttch.img" size="184320" crc="95038096" sha1="be75d99ff346aa253ee26430f9f905089fa84097"/>
+			</dataarea>
+		</part>
+	</software>
+
+</softwarelist>
