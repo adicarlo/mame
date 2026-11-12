@@ -170,13 +170,14 @@ device_vt100_stp_interface::device_vt100_stp_interface(const machine_config &mco
 
     The printer connector carries only TXD, RXD (XON/XOFF from the
     printer), DSR (the printer's DTR, its ready line) and DTR, which is on
-    whenever the terminal is (EK-VT1AC-UG-002, chapter 6).
+    whenever the terminal is (EK-VT1AC-UG-002, chapter 6).  While DSR is off
+    the firmware sends the printer nothing and carries on where it stopped
+    when DSR returns.
 
     TODO:
     - RAM: the firmware tests and uses only 2400-27FF (1K); whether
       2000-23FF exists or mirrors it isn't known
     - the switches: the firmware reads no port for them
-    - the printer port's handshake lines
     - an "intelligent" STP board, maybe an older version or a prototype:
       an expansion board with a processor and DMA, a RAM/send buffer for
       the printer port.  Two banks of two EPROMs (2K or 4K each, jumpers
