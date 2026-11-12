@@ -9,29 +9,36 @@
     program ROM sockets plus an 8K one.
 
     The terminal controller decodes only A10-A13, so its ROM and RAM repeat
-    every 16K.  The AVO decodes A13-A15 (E12) and asserts MEM DISABLE for all
-    of 8000-BFFF (E16), so that area is the AVO's whether or not its sockets
-    are filled.  Its RAM is selected from the terminal controller's decode,
-    so it repeats with the base RAM outside 8000-BFFF.
+    every 16K.  The AVO decodes A13-A15 (E12, a 74LS138 enabled on every
+    cycle) and asserts MEM DISABLE for all of 8000-BFFF (E16, open collector
+    gates on its 8000-9FFF and A000-BFFF outputs), so that area is the AVO's
+    whether or not its sockets are filled; the patch switches add blocks
+    below 2000 only.  TM-003 6.2.5.3 reads as if MEM DISABLE depended on the
+    jumpers; the schematic doesn't.  Its RAM is selected from the terminal
+    controller's decode, so it repeats with the base RAM outside 8000-BFFF.
 
     Jumpers W5-W7 (switch S1 on later boards) place the 8K ROM at 0000
     (overlay), 8000 or A000; the 2K sockets answer in the 8000/A000 block it
-    doesn't claim (E16, E23, E24).  The VT1XX-AC and VT132 sets use W6,
-    8K socket at A000, so the 2K ROMs sit at 8000-9FFF.  Patch jumpers
-    W1-W4/W8-W14, which put 2K ROMs over the base firmware, and the 8K
-    overlay aren't modelled: no ROMs that use them are dumped.
+    doesn't claim (E16, E23, E24).  Only W6 is modelled, as the VT1XX-AC
+    and VT132 sets use it: 8K socket at A000, 2K ROMs at 8000-9FFF.  No 8K
+    ROM is dumped, so A000-BFFF is always an empty socket.  Patch jumpers
+    W1-W4/W8-W14, which put 2K ROMs over the base firmware, and the other
+    8K placements aren't modelled: no ROMs that use them are dumped.
 
     Sources: VT100 technical manual EK-VT100-TM-003, 4.2.5 and 6.2.3,
     tables 5-8 to 5-10; MP-00633 print set, AVO schematic D-CS-5413097.
 
     TODO:
-    - ALT CHAR SET (attribute bit 3) to the alternate character ROM
-    - patch and overlay configurations
+    - patch jumpers and the W5/W7 8K ROM placements, once ROMs for them
+      are dumped
 
 ***************************************************************************/
 
 #include "emu.h"
 #include "vt100_avo.h"
+
+#include <algorithm>
+#include <iterator>
 
 
 //**************************************************************************
@@ -88,25 +95,19 @@ protected:
 		: device_t(mconfig, type, tag, owner, clock)
 		, device_vt100_avo_interface(mconfig, *this)
 		, m_rom(*this, "rom")
-		, m_rom8k(*this, "rom8k")
-		, m_jumpers(*this, "JUMPERS")
 	{
 	}
 
 	virtual void device_start() override ATTR_COLD;
-	virtual void device_reset() override ATTR_COLD;
-	virtual ioport_constructor device_input_ports() const override ATTR_COLD;
 
 private:
 	u8 attr_r(offs_t offset) { return m_attr[offset] | 0xf0; }   // 4 bits wide
 	void attr_w(offs_t offset, u8 data) { m_attr[offset] = data & 0x0f; }
 
 	optional_region_ptr<u8> m_rom;      // 2K sockets A-D (E21, E17, E13, E8)
-	optional_region_ptr<u8> m_rom8k;    // 8K socket (E8)
-	required_ioport m_jumpers;
 
-	std::unique_ptr<u8 []> m_screen;
-	std::unique_ptr<u8 []> m_attr;
+	u8 m_screen[0x400];
+	u8 m_attr[0x1000];
 };
 
 class vt100_avo_ac_device : public vt100_avo_device
@@ -120,19 +121,6 @@ public:
 protected:
 	virtual const tiny_rom_entry *device_rom_region() const override ATTR_COLD;
 };
-
-
-static INPUT_PORTS_START( vt100_avo )
-	PORT_START("JUMPERS")
-	PORT_CONFNAME(0x01, 0x00, "AVO 8K ROM socket address (W6/W7)")
-	PORT_CONFSETTING(0x00, "A000-BFFF (W6, VT1XX-AC)")
-	PORT_CONFSETTING(0x01, "8000-9FFF (W7)")
-INPUT_PORTS_END
-
-ioport_constructor vt100_avo_device::device_input_ports() const
-{
-	return INPUT_PORTS_NAME(vt100_avo);
-}
 
 
 ROM_START( vt100_avo_ac )
@@ -153,33 +141,25 @@ const tiny_rom_entry *vt100_avo_ac_device::device_rom_region() const
 
 void vt100_avo_device::device_start()
 {
-	m_screen = std::make_unique<u8 []>(0x400);
-	m_attr = std::make_unique<u8 []>(0x1000);
-	std::fill_n(m_attr.get(), 0x1000, 0x0f);
+	std::fill_n(m_screen, std::size(m_screen), 0);
+	std::fill_n(m_attr, std::size(m_attr), 0x0f);
 
-	save_pointer(NAME(m_screen), 0x400);
-	save_pointer(NAME(m_attr), 0x1000);
-}
+	save_item(NAME(m_screen));
+	save_item(NAME(m_attr));
 
-void vt100_avo_device::device_reset()
-{
 	address_space &mem = space();
 
 	// RAM: selected through the terminal controller's decode, so it repeats
 	// every 16K with the base RAM
-	mem.install_ram(0x2c00, 0x2fff, 0xc000, m_screen.get());
+	mem.install_ram(0x2c00, 0x2fff, 0xc000, m_screen);
 	mem.install_readwrite_handler(0x3000, 0x3fff, 0, 0xc000, 0,
 			read8sm_delegate(*this, FUNC(vt100_avo_device::attr_r)),
 			write8sm_delegate(*this, FUNC(vt100_avo_device::attr_w)));
 
 	// MEM DISABLE: 8000-BFFF is the AVO's, empty sockets read open bus
 	mem.unmap_readwrite(0x8000, 0xbfff);
-	offs_t const base8k = BIT(m_jumpers->read(), 0) ? 0x8000 : 0xa000;
-	offs_t const base2k = base8k ^ 0x2000;
-	if (m_rom8k.found())
-		mem.install_rom(base8k, base8k + 0x1fff, &m_rom8k[0]);
 	if (m_rom.found())
-		mem.install_rom(base2k, base2k + 0x1fff, &m_rom[0]);
+		mem.install_rom(0x8000, 0x9fff, &m_rom[0]);
 }
 
 u8 vt100_avo_device::video_r(offs_t offset)
