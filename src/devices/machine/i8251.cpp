@@ -189,9 +189,16 @@ void i8251_device::receive_clock()
 			{
 				m_rx_start_check = false;
 				if (m_rxd)
+				{
 					receive_register_reset();
+					// the register still holds the low start bit; shift the
+					// high line in so the next falling edge is a transition
+					receive_register_update_bit(m_rxd);
+				}
 				else
+				{
 					m_rxc_count = m_br_factor;
+				}
 				return;
 			}
 		}
@@ -203,7 +210,9 @@ void i8251_device::receive_clock()
 		if (is_receive_register_synchronized())
 		{
 			if (sync)
+			{
 				m_rxc_count = m_br_factor;
+			}
 			else if (m_br_factor > 1)
 			{
 				// check the start bit again half a bit from now
@@ -211,7 +220,10 @@ void i8251_device::receive_clock()
 				m_rxc_count = m_br_factor / 2;
 			}
 			else
+			{
+				m_rx_start_check = false;
 				m_rxc_count = 3 * m_br_factor / 2;
+			}
 		}
 
 		if (is_receive_register_full())
@@ -611,9 +623,12 @@ void i8251_device::command_w(uint8_t data)
 	// TxD is held marking whenever the transmitter is empty, unless SBRK is
 	// set (8251A data sheet, Transmitter Buffer and Transmitter Control).  A
 	// command that clears SBRK, an internal reset included, ends the break
+	// Async only: in sync mode the idle transmitter sends SYNC characters,
+	// and the last bit of a character, which can be 0, is still going out
+	// when the register already reads empty
 	if (BIT(data, 3))
 		m_txd_handler(0);
-	else if (is_transmit_register_empty())
+	else if (!m_sync_byte_count && is_transmit_register_empty())
 		m_txd_handler(1);
 
 	check_for_tx_start();
@@ -756,6 +771,7 @@ void i8251_device::mode_w(uint8_t data)
 	}
 
 	receive_register_reset();
+	m_rx_start_check = false;
 	m_txc_count = 0;
 }
 
