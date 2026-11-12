@@ -247,8 +247,14 @@ int ins8250_uart_device::intrpt_r()
 }
 
 // Baud rate generator is reset after writing to either byte of divisor latch
-void ins8250_uart_device::update_baud_rate()
+void ins8250_uart_device::update_baud_rate(u16 dl)
 {
+	// An unchanged divisor is ignored: set_rate() below would also throw away
+	// the character being sent, which the chip doesn't (see the FIXME)
+	if (dl == m_regs.dl)
+		return;
+	m_regs.dl = dl;
+
 	LOG("%.1f baud selected (divisor = %d)\n", double(clock()) / (m_regs.dl * 16), m_regs.dl);
 	set_rate(clock(), m_regs.dl * 16);
 
@@ -267,15 +273,7 @@ void ins8250_uart_device::ins8250_w(offs_t offset, u8 data)
 		case 0:
 			if (m_regs.lcr & INS8250_LCR_DLAB)
 			{
-				// rewriting the divisor it already holds changes nothing on the
-				// chip, but update_baud_rate would cut off the character being
-				// sent (the VT102 rewrites it before every printer byte)
-				u16 const dl = (m_regs.dl & 0xff00) | data;
-				if (dl != m_regs.dl)
-				{
-					m_regs.dl = dl;
-					update_baud_rate();
-				}
+				update_baud_rate((m_regs.dl & 0xff00) | data);
 			}
 			else
 			{
@@ -291,12 +289,7 @@ void ins8250_uart_device::ins8250_w(offs_t offset, u8 data)
 		case 1:
 			if (m_regs.lcr & INS8250_LCR_DLAB)
 			{
-				u16 const dl = (m_regs.dl & 0xff) | (data << 8);
-				if (dl != m_regs.dl)
-				{
-					m_regs.dl = dl;
-					update_baud_rate();
-				}
+				update_baud_rate((m_regs.dl & 0xff) | (data << 8));
 			}
 			else
 			{

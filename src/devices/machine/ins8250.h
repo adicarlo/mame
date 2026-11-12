@@ -61,7 +61,7 @@ protected:
 	void trigger_int(int flag);
 	void clear_int(int flag);
 
-	void update_baud_rate();
+	void update_baud_rate(u16 dl);
 
 	const dev_type m_device_type;
 	struct {
