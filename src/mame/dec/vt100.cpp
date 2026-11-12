@@ -45,7 +45,6 @@
 #include "machine/com8116.h"
 #include "machine/er1400.h"
 #include "machine/i8251.h"
-#include "machine/input_merger.h"
 #include "machine/ins8250.h"
 #include "machine/rstbuf.h"
 #include "vt100_avo.h"
@@ -141,12 +140,15 @@ private:
 
 // VT100 terminal controller: E31 decodes A10-A13 only, so ROM and RAM repeat
 // every 16K; 2C00-3FFF is the AVO's (open bus without it), and so is
-// 8000-BFFF when it is fitted (it asserts MEM DISABLE there)
+// 8000-BFFF when it is fitted (it asserts MEM DISABLE there).  E31 and the
+// lines to it are on MP-00633 terminal controller sheets (74LS139: A12/A13,
+// then A10/A11 for the RAM; no A14/A15 anywhere); TM-003 4.2.5.5 likewise
+// says the board ignores A14 and A15.
 void vt100_state::vt100_mem(address_map &map)
 {
 	map.unmap_value_high();
 	map(0x0000, 0x1fff).mirror(0xc000).rom();  // ROM ( 4 * 2K)
-	map(0x2000, 0x2bff).mirror(0xc000).ram().share("p_ram"); // Screen and scratch RAM
+	map(0x2000, 0x2bff).mirror(0xc000).ram().share(m_p_ram); // Screen and scratch RAM
 }
 
 void vt100_state::vt180_mem(address_map &map)
@@ -791,24 +793,9 @@ ROM_START( vt100ac ) // This is from the VT180 technical manual at http://www.bi
 
 	// printer port ROM 23-029e4: see vt100_stp.cpp
 
-	ROM_REGION(0x1000, "chargen",0)
+	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 	ROM_LOAD( "23-094e2-00.e9", 0x0800, 0x0800, NO_DUMP) // optional ?word processing? alternate character set ROM
-	ROM_REGION(0x10000, "stpcpu",ROMREGION_ERASEFF)
-/* The intelligent STP board: Below is limited information for an ?older version? or prototype of the board
-// expansion board for a vt100 with a processor on it and dma, intended to act as a RAM/send buffer for the STP printer board.
-// It can be populated with two banks of two EPROMs each, each bank either contains 2k or 4k EPROMs depending on the w2/w3 and w4/w5 jumpers.
-// It also has two PROMs on the CPU board. I don't know if it is technically necessary to have this board installed if an STP module is installed, but due to the alt stp ROMset, it probably is.
-    ROM_LOAD( "23-003e3-00.e10", 0x0000, 0x1000, NO_DUMP) // "EPROM 0" bank 0
-    ROM_LOAD( "23-004e3-00.e4", 0x1000, 0x1000, NO_DUMP) // "EPROM 1" bank 0
-    ROM_LOAD( "23-005e3-00.e9", 0x2000, 0x1000, NO_DUMP) // "EPROM 2" bank 1
-    ROM_LOAD( "23-006e3-00.e3", 0x3000, 0x1000, NO_DUMP) // "EPROM 3" bank 1
-    //ROM_REGION(0x0800, "avo",0)
-    //ROM_LOAD( "23-???e2-00.e34", 0x0000, 0x0800, NO_DUMP) // ? second gfx ROM?
-    ROM_REGION(0x0400, "proms",0)
-    ROM_LOAD( "23-312a1-07.e26", 0x0000, 0x0200, NO_DUMP) // "PROM A"; handles 8085 I/O mapping? (USART, timer, DMA, comm, etc)
-    ROM_LOAD( "23-313a1-07.e15", 0x0200, 0x0200, NO_DUMP) // "PROM B"; handles firmware ROM mapping and memory size/page select; bit 0 = RAM page, bits 1-3 unused, bits 4-7 select one EPROM each
-    */
 ROM_END
 
 #if 0

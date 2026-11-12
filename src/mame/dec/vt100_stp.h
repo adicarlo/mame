@@ -55,16 +55,22 @@ public:
 	void line_rxd_w(int state);
 	void line_dsr_w(int state);
 
+	// from the option, to the terminal controller and the line
+	void opt_tc_rxd_w(int state) { m_tc_rxd(state); }
+	void opt_tc_dsr_w(int state) { m_tc_dsr(state); }
+	void opt_int_tclk_w(int state) { m_int_tclk(state); }
+	void opt_int_rclk_w(int state) { m_int_rclk(state); }
+	void opt_line_txd_w(int state) { m_line_txd(state); }
+	void opt_line_dtr_w(int state) { m_line_dtr(state); }
+
 	// OPTION PRESENT H: the empty connector shorts it to ground
 	bool present() const { return m_card != nullptr; }
 
 protected:
 	virtual void device_resolve_objects() override ATTR_COLD;
-	virtual void device_start() override ATTR_COLD { }
+	virtual void device_start() override ATTR_COLD;
 
 private:
-	friend class device_vt100_stp_interface;
-
 	devcb_write_line m_tc_rxd;
 	devcb_write_line m_tc_dsr;
 	devcb_write_line m_int_tclk;
@@ -90,12 +96,7 @@ public:
 protected:
 	device_vt100_stp_interface(const machine_config &mconfig, device_t &device);
 
-	void tc_rxd(int state) { m_slot->m_tc_rxd(state); }
-	void tc_dsr(int state) { m_slot->m_tc_dsr(state); }
-	void int_tclk(int state) { m_slot->m_int_tclk(state); }
-	void int_rclk(int state) { m_slot->m_int_rclk(state); }
-	void line_txd(int state) { m_slot->m_line_txd(state); }
-	void line_dtr(int state) { m_slot->m_line_dtr(state); }
+	vt100_stp_slot_device &slot() const { return *m_slot; }
 
 private:
 	vt100_stp_slot_device *const m_slot;

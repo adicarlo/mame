@@ -58,6 +58,10 @@ void vt100_stp_slot_device::device_resolve_objects()
 	m_card = get_card_device();
 }
 
+void vt100_stp_slot_device::device_start()
+{
+}
+
 // With no option the contact pairs short, joining each terminal signal to
 // its line signal; LOCAL CLK goes nowhere.
 
@@ -171,6 +175,12 @@ device_vt100_stp_interface::device_vt100_stp_interface(const machine_config &mco
     - check the 23-029E4 dump: in 2K blocks it reads A, B, B, empty
     - the switches: the firmware reads no port for them
     - the printer port's handshake lines
+    - an "intelligent" STP board, maybe an older version or a prototype:
+      an expansion board with a processor and DMA, a RAM/send buffer for
+      the printer port.  Two banks of two EPROMs (2K or 4K each, jumpers
+      W2/W3 and W4/W5) and two PROMs, none dumped: 23-003E3 (E10),
+      23-004E3 (E4), 23-005E3 (E9), 23-006E3 (E3); PROM A 23-312A1 (E26,
+      8085 I/O decode?), PROM B 23-313A1 (E15, ROM and RAM page select?)
 
 ***************************************************************************/
 
@@ -187,6 +197,8 @@ public:
 		, m_local(*this, "local")
 		, m_prt(*this, "prtuart")
 		, m_brg(*this, "brg")
+		, m_rxint(*this, "rxint")
+		, m_printer(*this, "printer")
 	{
 	}
 
@@ -196,11 +208,11 @@ public:
 	virtual void tc_rclk_w(int state) override { m_line->write_rxc(state); }
 	virtual void local_clk_w(int state) override;
 	virtual void line_rxd_w(int state) override { m_line->write_rxd(state); }
-	virtual void line_dsr_w(int state) override { m_line->write_dsr(state); tc_dsr(state); }
+	virtual void line_dsr_w(int state) override { m_line->write_dsr(state); slot().opt_tc_dsr_w(state); }
 
 protected:
 	virtual void device_start() override ATTR_COLD;
-	virtual void device_reset() override ATTR_COLD;
+	virtual void device_reset_after_children() override ATTR_COLD;
 	virtual void device_add_mconfig(machine_config &config) override ATTR_COLD;
 	virtual const tiny_rom_entry *device_rom_region() const override ATTR_COLD;
 
@@ -210,22 +222,19 @@ private:
 	required_device<i8251_device> m_local;
 	required_device<i8251_device> m_prt;
 	required_device<com8116_device> m_brg;
+	required_device<input_merger_device> m_rxint;
+	required_device<rs232_port_device> m_printer;
 
 	u16 m_tick = 0; // LOCAL CLK divider for the RST 7.5 timer
-	int m_local_clk = 0;
+	u8 m_local_clk = 0;
 	u8 m_txrdy = 0; // transmitter ready, one bit per 8251
 	u8 m_rts = 0;   // RTS output level, one bit per 8251
 
-	template <unsigned N> void txrdy_w(int state) { m_txrdy = (m_txrdy & ~(1 << N)) | (state << N); txint_update(); }
-	template <unsigned N> void rts_w(int state) { m_rts = (m_rts & ~(1 << N)) | (state << N); txint_update(); }
+	template <u32 N> void txrdy_w(int state) { m_txrdy = (m_txrdy & ~(1 << N)) | (state << N); txint_update(); }
+	template <u32 N> void rts_w(int state) { m_rts = (m_rts & ~(1 << N)) | (state << N); txint_update(); }
 	void txint_update();
 
 	void brg_w(offs_t offset, u8 data);
-
-	// 8251 outputs to the connector
-	void line_txd_w(int state) { line_txd(state); }
-	void line_dtr_w(int state) { line_dtr(state); }
-	void local_txd_w(int state) { tc_rxd(state); }
 
 	void mem_map(address_map &map) ATTR_COLD;
 	void io_map(address_map &map) ATTR_COLD;
@@ -285,8 +294,8 @@ void vt100_stp_ac_device::local_clk_w(int state)
 	// LOCAL CLK clocks both ends of the local link
 	m_local->write_txc(state);
 	m_local->write_rxc(state);
-	int_tclk(state);
-	int_rclk(state);
+	slot().opt_int_tclk_w(state);
+	slot().opt_int_rclk_w(state);
 }
 
 void vt100_stp_ac_device::txint_update()
@@ -308,12 +317,13 @@ void vt100_stp_ac_device::device_start()
 	m_prt->write_cts(0);
 }
 
-void vt100_stp_ac_device::device_reset()
+void vt100_stp_ac_device::device_reset_after_children()
 {
 	// the printer connector's DTR is on whenever the terminal is.  Not in
 	// device_start: a device on the connector that answers DTR (a loopback
-	// plug) has not started yet then, and would never assert DSR
-	subdevice<rs232_port_device>("printer")->write_dtr(0);
+	// plug) has not started yet then, and would never assert DSR.  After the
+	// children, so that resetting the device on the connector doesn't undo it
+	m_printer->write_dtr(0);
 }
 
 void vt100_stp_ac_device::device_add_mconfig(machine_config &config)
@@ -322,24 +332,24 @@ void vt100_stp_ac_device::device_add_mconfig(machine_config &config)
 	m_cpu->set_addrmap(AS_PROGRAM, &vt100_stp_ac_device::mem_map);
 	m_cpu->set_addrmap(AS_IO, &vt100_stp_ac_device::io_map);
 
-	INPUT_MERGER_ANY_HIGH(config, "rxint").output_handler().set_inputline(m_cpu, I8085_RST65_LINE);
+	INPUT_MERGER_ANY_HIGH(config, m_rxint).output_handler().set_inputline(m_cpu, I8085_RST65_LINE);
 
 	I8251(config, m_line, 4.9152_MHz_XTAL / 2);
-	m_line->txd_handler().set(FUNC(vt100_stp_ac_device::line_txd_w));
-	m_line->dtr_handler().set(FUNC(vt100_stp_ac_device::line_dtr_w));
-	m_line->rxrdy_handler().set("rxint", FUNC(input_merger_device::in_w<0>));
+	m_line->txd_handler().set(DEVICE_SELF_OWNER, FUNC(vt100_stp_slot_device::opt_line_txd_w));
+	m_line->dtr_handler().set(DEVICE_SELF_OWNER, FUNC(vt100_stp_slot_device::opt_line_dtr_w));
+	m_line->rxrdy_handler().set(m_rxint, FUNC(input_merger_device::in_w<0>));
 	m_line->txrdy_handler().set(FUNC(vt100_stp_ac_device::txrdy_w<0>));
 	m_line->rts_handler().set(FUNC(vt100_stp_ac_device::rts_w<0>));
 
 	I8251(config, m_local, 4.9152_MHz_XTAL / 2);
-	m_local->txd_handler().set(FUNC(vt100_stp_ac_device::local_txd_w));
-	m_local->rxrdy_handler().set("rxint", FUNC(input_merger_device::in_w<1>));
+	m_local->txd_handler().set(DEVICE_SELF_OWNER, FUNC(vt100_stp_slot_device::opt_tc_rxd_w));
+	m_local->rxrdy_handler().set(m_rxint, FUNC(input_merger_device::in_w<1>));
 	m_local->txrdy_handler().set(FUNC(vt100_stp_ac_device::txrdy_w<1>));
 	m_local->rts_handler().set(FUNC(vt100_stp_ac_device::rts_w<1>));
 
 	I8251(config, m_prt, 4.9152_MHz_XTAL / 2);
-	m_prt->txd_handler().set("printer", FUNC(rs232_port_device::write_txd));
-	m_prt->rxrdy_handler().set("rxint", FUNC(input_merger_device::in_w<2>));
+	m_prt->txd_handler().set(m_printer, FUNC(rs232_port_device::write_txd));
+	m_prt->rxrdy_handler().set(m_rxint, FUNC(input_merger_device::in_w<2>));
 	m_prt->txrdy_handler().set(FUNC(vt100_stp_ac_device::txrdy_w<2>));
 	m_prt->rts_handler().set(FUNC(vt100_stp_ac_device::rts_w<2>));
 
@@ -347,9 +357,9 @@ void vt100_stp_ac_device::device_add_mconfig(machine_config &config)
 	m_brg->fr_handler().set(m_prt, FUNC(i8251_device::write_rxc));
 	m_brg->ft_handler().set(m_prt, FUNC(i8251_device::write_txc));
 
-	rs232_port_device &printer(RS232_PORT(config, "printer", default_rs232_devices, nullptr));
-	printer.rxd_handler().set(m_prt, FUNC(i8251_device::write_rxd));
-	printer.dsr_handler().set(m_prt, FUNC(i8251_device::write_dsr));
+	RS232_PORT(config, m_printer, default_rs232_devices, nullptr);
+	m_printer->rxd_handler().set(m_prt, FUNC(i8251_device::write_rxd));
+	m_printer->dsr_handler().set(m_prt, FUNC(i8251_device::write_dsr));
 }
 
 } // anonymous namespace
