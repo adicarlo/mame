@@ -156,10 +156,16 @@ device_vt100_stp_interface::device_vt100_stp_interface(const machine_config &mco
       RTS (output low) and starts it by clearing it, and without the gate
       the idle transmitters would hold RST 5.5 for good.  Both inferred.
     - a timer on RST 7.5: it ends an escape sequence from the host (40
-      ticks after ESC) before passing it on, and times BREAK on the local
-      link (220 ticks short, 2800 long).  LOCAL CLK / 256 (about 983 Hz) is
-      assumed: it makes the short break 0.224 s against the VT100's
-      0.2333 s, but the long one 2.85 s against 3.5 s.
+      ticks after ESC) before passing it on, and times the BREAK it sends
+      the host when the terminal sends one: 220 ticks, or 2800 if the
+      terminal has dropped DTR (a long break).  The VT1XX-AC user guide
+      gives 0.2333 s and 3.5 s, each +/-10%, which only a tick of 857-889 Hz
+      meets.  LOCAL CLK / 288 (scan line rate / 18, 874 Hz) is assumed:
+      0.252 s and 3.20 s.
+
+    The printer connector carries only TXD, RXD (XON/XOFF from the
+    printer), DSR (the printer's DTR, its ready line) and DTR, which is on
+    whenever the terminal is (EK-VT1AC-UG-002, chapter 6).
 
     TODO:
     - check the 23-029E4 dump: in 2K blocks it reads A, B, B, empty
@@ -204,7 +210,7 @@ private:
 	required_device<i8251_device> m_prt;
 	required_device<com8116_device> m_brg;
 
-	u8 m_tick = 0; // LOCAL CLK divider for the RST 7.5 timer
+	u16 m_tick = 0; // LOCAL CLK divider for the RST 7.5 timer
 	int m_local_clk = 0;
 	u8 m_txrdy = 0; // transmitter ready, one bit per 8251
 	u8 m_rts = 0;   // RTS output level, one bit per 8251
@@ -265,12 +271,13 @@ void vt100_stp_ac_device::brg_w(offs_t offset, u8 data)
 
 void vt100_stp_ac_device::local_clk_w(int state)
 {
-	// RST 7.5 timer: a square wave at LOCAL CLK / 256 (assumed, see above)
+	// RST 7.5 timer: a square wave at LOCAL CLK / 288 (assumed, see above)
 	if (state && !m_local_clk)
 	{
-		m_tick++;
-		if (!(m_tick & 0x7f))
-			m_cpu->set_input_line(I8085_RST75_LINE, BIT(m_tick, 7) ? ASSERT_LINE : CLEAR_LINE);
+		if (++m_tick == 288)
+			m_tick = 0;
+		if (m_tick == 0 || m_tick == 144)
+			m_cpu->set_input_line(I8085_RST75_LINE, m_tick ? CLEAR_LINE : ASSERT_LINE);
 	}
 	m_local_clk = state;
 
@@ -298,6 +305,9 @@ void vt100_stp_ac_device::device_start()
 	m_line->write_cts(0);
 	m_local->write_cts(0);
 	m_prt->write_cts(0);
+
+	// the printer connector's DTR is on whenever the terminal is
+	subdevice<rs232_port_device>("printer")->write_dtr(0);
 }
 
 void vt100_stp_ac_device::device_add_mconfig(machine_config &config)
