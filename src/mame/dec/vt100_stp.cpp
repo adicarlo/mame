@@ -343,7 +343,110 @@ void vt100_stp_ac_device::device_add_mconfig(machine_config &config)
 DEFINE_DEVICE_TYPE_PRIVATE(VT100_STP_AC, device_vt100_stp_interface, vt100_stp_ac_device, "vt100_stp_ac", "DEC VT1XX-AC printer port")
 
 
+//**************************************************************************
+//  VT103 STP CONNECTOR CARD
+//**************************************************************************
+
+/***************************************************************************
+
+    The VT103 STP connector card (5414350, MP00731 page 67; EK-VT103-UG-001
+    3.2.2) makes the terminal the console of the LSI-11 built into the
+    VT103.  It has no parts besides its connectors:
+    - J1 (console): the terminal's TXD and RXD, LOCAL CLK and, through
+      jumper W1, TC INIT.  A 10-wire cable takes it to a console channel
+      of the LSI-11's serial card (a DLV11-J or MXV11).  The STP signals
+      are at EIA levels (the terminal's 1488/1489 sit on its side of the
+      STP, MP-00633 sheet 3), so J1 is an RS-232 port.
+    - LOCAL CLK clocks the terminal's 8251 both ways, so the console runs
+      at about 15,734 baud whatever SET-UP says (UG 3.2.2: "approximately
+      15K baud").  The serial card takes its own clock from J1.
+    - J2 and J3: the line side of every pair, and the terminal's transmit
+      clock, for a cable to a second serial channel, which then has the
+      terminal's EIA connector.  Nothing is fitted there in this model, so
+      the EIA connector is dead, as it is with no cable on J2/J3.
+    - The terminal's handshake inputs (CTS, DSR, CD, RI, SPDI) and its RTS,
+      DTR and SPDS outputs go nowhere; the 1489s read the open inputs as
+      off.  OPTION PRESENT (pin 34) is not grounded, so it reads high.
+
+    Not modelled: W1 (TC INIT to J1 pin L, for resetting the LSI-11) and
+    the clocks on J1 and J2, which nothing here takes.  The serial devices
+    that plug into J1 (null_modem, pty) run at fixed rates, none within
+    8% of 15,734 baud, so only a loopback plug talks to it yet.
+
+***************************************************************************/
+
+namespace {
+
+class vt100_stp_vt103_device : public device_t, public device_vt100_stp_interface
+{
+public:
+	vt100_stp_vt103_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock)
+		: device_t(mconfig, VT100_STP_VT103, tag, owner, clock)
+		, device_vt100_stp_interface(mconfig, *this)
+		, m_console(*this, "console")
+	{
+	}
+
+	virtual void stp_w(unsigned pin, int state) override;
+
+protected:
+	virtual void device_start() override ATTR_COLD { }
+	virtual void device_reset() override ATTR_COLD;
+	virtual void device_add_mconfig(machine_config &config) override ATTR_COLD;
+
+private:
+	required_device<rs232_port_device> m_console;
+};
+
+void vt100_stp_vt103_device::stp_w(unsigned pin, int state)
+{
+	using stp = vt100_stp_slot_device;
+	switch (pin)
+	{
+	case stp::TC_TXD:
+		m_console->write_txd(state);
+		break;
+	case stp::LOCAL_CLK:
+		slot().drive(stp::INTERNAL_TCLK, state);
+		slot().drive(stp::INTERNAL_RCLK, state);
+		break;
+	default:
+		// everything else ends on J2/J3, or isn't wired
+		break;
+	}
+}
+
+void vt100_stp_vt103_device::device_reset()
+{
+	using stp = vt100_stp_slot_device;
+
+	// open inputs on the terminal side read as off
+	slot().drive(stp::TC_CTS, 1);
+	slot().drive(stp::TC_DSR, 1);
+	slot().drive(stp::TC_CD, 1);
+	slot().drive(stp::TC_RI, 1);
+	slot().drive(stp::TC_SPDI, 1);
+
+	// and the EIA connector's outputs are not driven: idle
+	slot().drive(stp::LINE_TXD, 1);
+	slot().drive(stp::LINE_RTS, 1);
+	slot().drive(stp::LINE_DTR, 1);
+	slot().drive(stp::LINE_SPDS, 1);
+}
+
+void vt100_stp_vt103_device::device_add_mconfig(machine_config &config)
+{
+	RS232_PORT(config, m_console, default_rs232_devices, nullptr);
+	m_console->rxd_handler().set(FUNC(vt100_stp_vt103_device::drive_w<vt100_stp_slot_device::TC_RXD>));
+}
+
+} // anonymous namespace
+
+DEFINE_DEVICE_TYPE_PRIVATE(VT100_STP_VT103, device_vt100_stp_interface, vt100_stp_vt103_device, "vt100_stp_vt103", "DEC VT103 STP connector card")
+
+
 void vt100_stp_options(device_slot_interface &device)
 {
 	device.option_add("vt1xxac", VT100_STP_AC);
+	device.option_add("vt103", VT100_STP_VT103);
 }

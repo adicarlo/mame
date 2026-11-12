@@ -126,6 +126,7 @@ void vt100_stp_slot_device::write(int state)
 
 DECLARE_DEVICE_TYPE(VT100_STP_SLOT, vt100_stp_slot_device)
 DECLARE_DEVICE_TYPE(VT100_STP_AC, device_vt100_stp_interface)
+DECLARE_DEVICE_TYPE(VT100_STP_VT103, device_vt100_stp_interface)
 
 void vt100_stp_options(device_slot_interface &device);
 
