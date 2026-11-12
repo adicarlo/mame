@@ -43,7 +43,8 @@ device_serial_interface::device_serial_interface(const machine_config &mconfig, 
 	m_tra_rate(attotime::never),
 	m_rcv_line(0),
 	m_tra_clock_state(false),
-	m_rcv_clock_state(false)
+	m_rcv_clock_state(false),
+	m_rcv_start_check(false)
 {
 }
 
@@ -60,6 +61,7 @@ void device_serial_interface::interface_pre_start()
 
 	m_rcv_clock_state = false;
 	m_tra_clock_state = false;
+	m_rcv_start_check = false;
 }
 
 void device_serial_interface::interface_post_start()
@@ -85,13 +87,36 @@ void device_serial_interface::interface_post_start()
 	device().save_item(NAME(m_rcv_line));
 	device().save_item(NAME(m_tra_clock_state));
 	device().save_item(NAME(m_rcv_clock_state));
+	device().save_item(NAME(m_rcv_start_check));
 }
 
 void device_serial_interface::set_rcv_rate(const attotime &rate)
 {
 	m_rcv_rate = rate / 2;
 	receive_register_reset();
+	m_rcv_start_check = false;
 	m_rcv_clock->adjust(attotime::never);
+}
+
+TIMER_CALLBACK_MEMBER(device_serial_interface::rcv_clock)
+{
+	if (m_rcv_start_check)
+	{
+		// Mid start bit: a line that is high again was a glitch, not a
+		// start bit.  A real UART samples here and goes back to hunting.
+		m_rcv_start_check = false;
+		if (m_rcv_line)
+		{
+			LOGMASKED(LOG_RX, "False start bit (%s)\n", device().machine().time().to_string());
+			m_rcv_clock->adjust(attotime::never);
+			receive_register_reset();
+			// the register still holds the low bit; shift the high line in
+			// so the next falling edge is seen as a transition
+			receive_register_update_bit(m_rcv_line);
+		}
+		return;
+	}
+	rx_clock_w(!m_rcv_clock_state);
 }
 
 void device_serial_interface::set_tra_rate(const attotime &rate)
@@ -236,8 +261,10 @@ void device_serial_interface::rx_w(int state)
 		LOGMASKED(LOG_RX, "Receiver is synchronized\n");
 		if (m_rcv_clock && !(m_rcv_rate.is_never()))
 		{
-			// make start delay half a cycle longer to make sure we are called after the sender
-			m_rcv_clock->adjust(m_rcv_rate * 2, 0, m_rcv_rate);
+			// check the start bit at its middle; the clock's first edge then
+			// comes half a cycle late to make sure we are called after the sender
+			m_rcv_start_check = true;
+			m_rcv_clock->adjust(m_rcv_rate, 0, m_rcv_rate);
 		}
 		else if (m_start_bit_hack_for_external_clocks)
 			m_rcv_bit_count_received--;
