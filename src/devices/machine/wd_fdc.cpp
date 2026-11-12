@@ -151,6 +151,8 @@ wd_fdc_device_base::wd_fdc_device_base(const machine_config &mconfig, device_typ
 	enp_cb(*this),
 	sso_cb(*this),
 	ready_cb(*this), // actually output by the drive, not by the FDC
+	dirc_cb(*this),
+	wg_cb(*this),
 	enmf_cb(*this, 0),
 	mon_cb(*this)
 {
@@ -238,7 +240,7 @@ void wd_fdc_device_base::mr_w(int state)
 		cmd_buffer = track_buffer = sector_buffer = -1;
 		counter = 0;
 		status_type_1 = true;
-		last_dir = 1;
+		set_dir(1);
 		mr = false;
 
 		// gnd == enmf enabled, otherwise disabled (default)
@@ -926,7 +928,7 @@ void wd_fdc_device_base::write_track_continue()
 			LOGSTATE("WAIT_INDEX_DONE\n");
 			sub_state = TRACK_DONE;
 			live_start(WRITE_TRACK_DATA);
-			pll_start_writing(machine().time(), floppy);
+			start_writing(machine().time(), floppy);
 			return;
 
 		case TRACK_DONE:
@@ -1201,7 +1203,7 @@ void wd_fdc_device_base::do_generic()
 		break;
 
 	case INITIAL_RESTORE:
-		last_dir = 1;
+		set_dir(1);
 		seek_start(RESTORE);
 		break;
 
@@ -1247,11 +1249,11 @@ void wd_fdc_device_base::do_cmd_w()
 			 "READ ID start",     "INTERRUPT start",   "READ track start",   "WRITE track start"}}[(command >> 4) & 0x0f]);
 	switch(command & 0xf0) {
 	case 0x00:
-		last_dir = 1;
+		set_dir(1);
 		seek_start(RESTORE);
 		break;
 	case 0x10:
-		last_dir = data > track ? 0 : 1;
+		set_dir(data > track ? 0 : 1);
 		seek_start(SEEK);
 		break;
 	case 0x20:
@@ -1260,12 +1262,12 @@ void wd_fdc_device_base::do_cmd_w()
 		break;
 	case 0x40:
 	case 0x50:
-		last_dir = 0;
+		set_dir(0);
 		seek_start(STEP);
 		break;
 	case 0x60:
 	case 0x70:
-		last_dir = 1;
+		set_dir(1);
 		seek_start(STEP);
 		break;
 	case 0x80:
@@ -1699,7 +1701,7 @@ void wd_fdc_device_base::live_sync()
 				cur_live.next_state = -1;
 			}
 			if(cur_live.state == IDLE) {
-				pll_stop_writing(floppy, cur_live.tm);
+				stop_writing(floppy, cur_live.tm);
 				cur_live.tm = attotime::never;
 			}
 		}
@@ -1715,7 +1717,7 @@ void wd_fdc_device_base::live_abort()
 		live_run(machine().time());
 	}
 
-	pll_stop_writing(floppy, cur_live.tm);
+	stop_writing(floppy, cur_live.tm);
 	cur_live.tm = attotime::never;
 	cur_live.state = IDLE;
 	cur_live.next_state = -1;
@@ -2270,7 +2272,7 @@ void wd_fdc_device_base::live_run(attotime limit)
 					else if(cur_live.byte_counter < sector_size + 7+3)
 						live_write_fm(0xff);
 					else {
-						pll_stop_writing(floppy, cur_live.tm);
+						stop_writing(floppy, cur_live.tm);
 						cur_live.state = IDLE;
 
 						// Checkpoint so a later rollback (from a CPU register
@@ -2315,7 +2317,7 @@ void wd_fdc_device_base::live_run(attotime limit)
 						live_write_mfm(0xff);
 //                      live_write_mfm(0x4e);
 					else {
-						pll_stop_writing(floppy, cur_live.tm);
+						stop_writing(floppy, cur_live.tm);
 						cur_live.state = IDLE;
 
 						// See the matching comment in the FM branch above.
@@ -2380,7 +2382,7 @@ void wd_fdc_device_base::live_run(attotime limit)
 					cur_live.bit_counter = 16;
 					cur_live.byte_counter = 0;
 					cur_live.data_bit_context = cur_live.data_reg & 1;
-					pll_start_writing(cur_live.tm, floppy);
+					start_writing(cur_live.tm, floppy);
 					live_write_fm(0x00);
 				}
 				break;
@@ -2390,7 +2392,7 @@ void wd_fdc_device_base::live_run(attotime limit)
 				cur_live.bit_counter = 16;
 				cur_live.byte_counter = 0;
 				cur_live.data_bit_context = cur_live.data_reg & 1;
-				pll_start_writing(cur_live.tm, floppy);
+				start_writing(cur_live.tm, floppy);
 				live_write_mfm(0x00);
 				break;
 			}
@@ -2450,6 +2452,26 @@ void wd_fdc_device_base::set_hld()
 		hld_cb(hld);
 		sub_state = temp;
 	}
+}
+
+// DIRC is high while stepping in, toward the spindle
+void wd_fdc_device_base::set_dir(int dir)
+{
+	last_dir = dir;
+	dirc_cb(dir ? 0 : 1);
+}
+
+// WG, the write gate, is high while the PLL writes to the disk
+void wd_fdc_device_base::start_writing(const attotime &tm, floppy_image_device *floppy)
+{
+	wg_cb(1);
+	pll_start_writing(tm, floppy);
+}
+
+void wd_fdc_device_base::stop_writing(floppy_image_device *floppy, const attotime &tm)
+{
+	pll_stop_writing(floppy, tm);
+	wg_cb(0);
 }
 
 void wd_fdc_device_base::drop_hld()

@@ -54,6 +54,8 @@ public:
 	auto hld_wr_callback() { return hld_cb.bind(); }
 	auto enp_wr_callback() { return enp_cb.bind(); }
 	auto sso_wr_callback() { return sso_cb.bind(); }
+	auto dirc_wr_callback() { return dirc_cb.bind(); }
+	auto wg_wr_callback() { return wg_cb.bind(); }
 	auto ready_wr_callback() { return ready_cb.bind(); }
 	auto enmf_rd_callback() { return enmf_cb.bind(); }
 
@@ -305,7 +307,7 @@ private:
 
 	live_info cur_live, checkpoint_live;
 
-	devcb_write_line intrq_cb, drq_cb, hld_cb, enp_cb, sso_cb, ready_cb;
+	devcb_write_line intrq_cb, drq_cb, hld_cb, enp_cb, sso_cb, ready_cb, dirc_cb, wg_cb;
 	devcb_read_line enmf_cb;
 	devcb_write_line mon_cb;
 
@@ -373,6 +375,9 @@ private:
 
 	void set_hld();
 	void drop_hld();
+	void set_dir(int dir);
+	void start_writing(const attotime &tm, floppy_image_device *floppy);
+	void stop_writing(floppy_image_device *floppy, const attotime &tm);
 
 	void update_sso();
 	void set_sso(int side);
