@@ -250,7 +250,9 @@ int ins8250_uart_device::intrpt_r()
 void ins8250_uart_device::update_baud_rate(u16 dl)
 {
 	// An unchanged divisor is ignored: set_rate() below would also throw away
-	// the character being sent, which the chip doesn't (see the FIXME)
+	// the character being sent (see the FIXME).  The data sheet (8.3) says
+	// only that a divisor write reloads the baud counter, not that it touches
+	// the shift register.
 	if (dl == m_regs.dl)
 		return;
 	m_regs.dl = dl;
