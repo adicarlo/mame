@@ -5334,6 +5334,8 @@ if BUSES["RS232"] then
 		MAME_DIR .. "src/devices/bus/rs232/teletex800.h",
 		MAME_DIR .. "src/devices/bus/rs232/terminal.cpp",
 		MAME_DIR .. "src/devices/bus/rs232/terminal.h",
+		MAME_DIR .. "src/devices/bus/rs232/tu58.cpp",
+		MAME_DIR .. "src/devices/bus/rs232/tu58.h",
 		MAME_DIR .. "src/devices/bus/rs232/votraxtnt.cpp",
 		MAME_DIR .. "src/devices/bus/rs232/votraxtnt.h",
 		MAME_DIR .. "src/devices/bus/rs232/xvd701.cpp",
