@@ -39,7 +39,6 @@
 
 #include "bus/rs232/rs232.h"
 #include "cpu/i8085/i8085.h"
-#include "cpu/z80/z80.h"
 #include "machine/ay31015.h"
 #include "machine/clock.h"
 #include "machine/com8116.h"
@@ -135,8 +134,6 @@ private:
 	void vt102_mem(address_map &map) ATTR_COLD;
 	void vt100_io(address_map &map) ATTR_COLD;
 	void vt102_io(address_map &map) ATTR_COLD;
-	void vt180_mem(address_map &map) ATTR_COLD;
-	void vt180_io(address_map &map) ATTR_COLD;
 };
 
 
@@ -153,13 +150,6 @@ void vt100_state::vt100_mem(address_map &map)
 	map.unmap_value_high();
 	map(0x0000, 0x1fff).mirror(0xc000).rom();  // ROM ( 4 * 2K)
 	map(0x2000, 0x2bff).mirror(0xc000).ram().share(m_p_ram); // Screen and scratch RAM
-}
-
-void vt100_state::vt180_mem(address_map &map)
-{
-	map.unmap_value_high();
-	map(0x0000, 0x1fff).rom();
-	map(0x2000, 0xffff).ram();
 }
 
 // VT101/VT102/VT131 board (5414185), from MP-01066, the VT101 Family Field
@@ -197,12 +187,6 @@ void vt100_state::vt102_mem(address_map &map)
 	// option ROMs: 8K (E69) at 8000 on both, and on the VT131 2K (E67) at A000;
 	// jumpers on sheet 6 can place the four sockets otherwise
 	map(0x8000, 0xbfff).mirror(0x4000).rom();
-}
-
-void vt100_state::vt180_io(address_map &map)
-{
-	map.unmap_value_high();
-	map.global_mask(0xff);
 }
 
 // Flag buffer E42, read at port 42 (basic video schematic D-CS-5413009):
@@ -424,7 +408,7 @@ static const gfx_layout vt100_charlayout =
 {
 	8, 16,                  /* 8 x 16 characters */
 	256,                    /* 2 x 128 characters */
-	1,                  /* 1 bits per pixel */
+	1,                      /* 1 bits per pixel */
 	{ 0 },                  /* no bitplanes */
 	/* x offsets */
 	{ 0, 1, 2, 3, 4, 5, 6, 7 },
@@ -534,9 +518,9 @@ void vt100_state::vt180(machine_config &config)
 {
 	vt100(config);
 
-	z80_device &z80cpu(Z80(config, "z80cpu", XTAL(24'883'200) / 9));
-	z80cpu.set_memory_map(&vt100_state::vt180_mem);
-	z80cpu.set_io_map(&vt100_state::vt180_io);
+	// the VT18X's paddle board takes the STP; its control module, in the
+	// expansion backplane, takes only power from it
+	m_stp->set_default_option("vt18x");
 }
 
 // VT105: the M7071 waveform graphics board pulls GRAPHICS FLAG low to say
@@ -994,10 +978,6 @@ ROM_START( vt180 )
 	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 	ROM_LOAD( "23-094e2-00.e9", 0x0800, 0x0800, NO_DUMP) // optional (comes default with some models) alternate character set ROM
-
-	ROM_REGION(0x10000, "z80cpu", 0) // z80 daughterboard
-	ROM_LOAD( "23-021e3-00.bin", 0x0000, 0x1000, CRC(a2a575d2) SHA1(47a2c40aaec89e8476240f25515d75ab157f2911))
-	ROM_LOAD( "23-017e3-00.bin", 0x1000, 0x1000, CRC(4bdd2398) SHA1(84f288def6c143a2d2ed9dedf947c862c66bb18e))
 ROM_END
 
 } // anonymous namespace

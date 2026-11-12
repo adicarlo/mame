@@ -449,4 +449,5 @@ void vt100_stp_options(device_slot_interface &device)
 {
 	device.option_add("vt1xxac", VT100_STP_AC);
 	device.option_add("vt103", VT100_STP_VT103);
+	device.option_add("vt18x", VT100_STP_VT18X);
 }
