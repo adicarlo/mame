@@ -140,7 +140,8 @@ device_vt100_stp_interface::device_vt100_stp_interface(const machine_config &mco
     switch settings 1 and 5 on, 2-4 off (5-69).
 
     The board layout here is read from its firmware, 23-029E4:
-    - an 8085 with the ROM at 0000-1FFF and RAM at 2000-27FF
+    - an 8085 with the ROM at 0000-1FFF (a 4K program, see the ROM) and
+      RAM at 2400-27FF
     - three 8251s, all set up as x16 clock, 8 data bits, no parity, 1 stop:
       80/90 the local side (the terminal's 8251), A0/B0 the line (host)
       side, C0/D0 the printer.  At power-up the firmware waits for an XON
@@ -172,7 +173,8 @@ device_vt100_stp_interface::device_vt100_stp_interface(const machine_config &mco
     whenever the terminal is (EK-VT1AC-UG-002, chapter 6).
 
     TODO:
-    - check the 23-029E4 dump: in 2K blocks it reads A, B, B, empty
+    - RAM: the firmware tests and uses only 2400-27FF (1K); whether
+      2000-23FF exists or mirrors it isn't known
     - the switches: the firmware reads no port for them
     - the printer port's handshake lines
     - an "intelligent" STP board, maybe an older version or a prototype:
@@ -242,9 +244,10 @@ private:
 
 ROM_START( vt100_stp_ac )
 	ROM_REGION(0x2000, "cpu", 0)
-	// It may be in the wrong order: it was dumped with A11 to pin 18, A12 to
-	// pin 21 and A13 to pin 20, which may not be the right assignments.  At
-	// worst its eight parts are out of order.
+	// The program is 4K: its power-up checksum covers 0000-0FFF (at 00DC) and
+	// comes out right, and nothing refers above 0E80.  1000-17FF repeats
+	// 0800-0FFF and 1800-1FFF is empty, from dumping it as an 8K part (A11 to
+	// pin 18, A12 to pin 21, A13 to pin 20).
 	ROM_LOAD( "23-029e4.stp.e14", 0x0000, 0x2000, CRC(da55c62b) SHA1(261b02b774d57253d1dedecab8ca0e368c2a96cd)) // Label: "S 8218 // C43020 // 23029E4 (C) DEC // TP02" @E14
 ROM_END
 
