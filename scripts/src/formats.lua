@@ -2318,6 +2318,18 @@ end
 
 --------------------------------------------------
 --
+--@src/lib/formats/vt180_dsk.h,FORMATS["VT180_DSK"] = true
+--------------------------------------------------
+
+if opt_tool(FORMATS, "VT180_DSK") then
+	files {
+		MAME_DIR.. "src/lib/formats/vt180_dsk.cpp",
+		MAME_DIR.. "src/lib/formats/vt180_dsk.h",
+	}
+end
+
+--------------------------------------------------
+--
 --@src/lib/formats/vt_cas.h,FORMATS["VT_CAS"] = true
 --------------------------------------------------
 
