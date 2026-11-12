@@ -8,7 +8,7 @@
 
         TODO: some video attributes are not fully supported yet
         TODO: finish support for the on-CPU board alternate character set ROM
-        TODO: STP (standard terminal port) bus for VT1XX-AC and VT125
+        TODO: STP (standard terminal port) options beyond the VT1XX-AC (VT125)
 
         An enormous amount of useful info can be derived from the VT125 technical manual:
         http://www.bitsavers.org/pdf/dec/terminal/vt100/EK-VT100-TM-003_VT100_Technical_Manual_Jul82.pdf starting on page 6-70, pdf page 316
@@ -41,6 +41,7 @@
 #include "cpu/i8085/i8085.h"
 #include "cpu/z80/z80.h"
 #include "machine/ay31015.h"
+#include "machine/clock.h"
 #include "machine/com8116.h"
 #include "machine/er1400.h"
 #include "machine/i8251.h"
@@ -49,6 +50,7 @@
 #include "machine/rstbuf.h"
 #include "vt100_avo.h"
 #include "vt100_kbd.h"
+#include "vt100_stp.h"
 #include "vtvideo.h"
 #include "screen.h"
 
@@ -74,7 +76,9 @@ public:
 		m_p_ram(*this, "p_ram"),
 		m_attr_ram(*this, "attr_ram"),
 		m_phosphor(*this, "phosphor"),
-		m_avo(*this, "avo")
+		m_avo(*this, "avo"),
+		m_stp(*this, "stp"),
+		m_localclk(*this, "localclk")
 	{
 	}
 
@@ -90,7 +94,6 @@ private:
 	// flag buffer (E42).  flags_r() turns them into the bus bits.
 	static constexpr u8 OPT_AVO = 0x01; // Advanced Video Option
 	static constexpr u8 OPT_GRAPHICS = 0x02; // VT105 waveform graphics board
-	static constexpr u8 OPT_STP = 0x04; // option on the Standard Terminal Port
 
 	required_device<cpu_device> m_maincpu;
 	required_device<vt100_video_device> m_crtc;
@@ -106,6 +109,8 @@ private:
 
 	required_ioport m_phosphor;
 	optional_device<vt100_avo_slot_device> m_avo; // VT100 board AVO connector (J1)
+	optional_device<vt100_stp_slot_device> m_stp; // VT100 board Standard Terminal Port (J3)
+	optional_device<clock_device> m_localclk; // LOCAL CLK to the STP
 	u8 m_options = 0; // set by each model's machine config
 	bool m_even_field_high = false; // VT101/VT102 board wires EVEN FIELD L to +5 V
 
@@ -127,8 +132,6 @@ private:
 	void vt102_mem(address_map &map) ATTR_COLD;
 	void vt100_io(address_map &map) ATTR_COLD;
 	void vt102_io(address_map &map) ATTR_COLD;
-	void stp_mem(address_map &map) ATTR_COLD;
-	void stp_io(address_map &map) ATTR_COLD;
 	void vt180_mem(address_map &map) ATTR_COLD;
 	void vt180_io(address_map &map) ATTR_COLD;
 };
@@ -222,7 +225,7 @@ u8 vt100_state::flags_r()
 	bool const avo = m_avo ? m_avo->present() : bool(m_options & OPT_AVO);
 	ret |= avo ? 0 : 0x02;
 	ret |= (m_options & OPT_GRAPHICS) ? 0 : 0x04;
-	ret |= (m_options & OPT_STP) ? 0x08 : 0;
+	ret |= (m_stp && m_stp->present()) ? 0x08 : 0; // OPTION PRESENT H
 	ret |= m_even_field_high ? 0x10 : 0;
 	ret |= !m_nvr->data_r() << 5;
 	ret |= m_crtc->lba7_r() << 6;
@@ -352,6 +355,10 @@ void vt100_state::machine_start()
 
 	m_pusart->write_cts(0);
 
+	// LOCAL CLK only matters to an STP option; don't run it for nothing
+	if (m_localclk && !m_stp->present())
+		m_localclk->set_clock(0);
+
 	if (m_printer_uart.found())
 	{
 		auto *printer_port = subdevice<rs232_port_device>("printer");
@@ -447,19 +454,33 @@ void vt100_state::vt100(machine_config &config)
 	m_crtc->lba3_lba4_wr_callback().set(FUNC(vt100_state::uart_clock_w));
 	m_crtc->lba7_wr_callback().set(m_nvr, FUNC(er1400_device::clock_w));
 
+	// The communication port's data, DTR/DSR and the 8251's clocks pass
+	// through the STP (J3), which joins them straight through when empty.
 	I8251(config, m_pusart, XTAL(24'883'200) / 9);
-	m_pusart->txd_handler().set(m_rs232, FUNC(rs232_port_device::write_txd));
-	m_pusart->dtr_handler().set(m_rs232, FUNC(rs232_port_device::write_dtr));
+	m_pusart->txd_handler().set(m_stp, FUNC(vt100_stp_slot_device::tc_txd_w));
+	m_pusart->dtr_handler().set(m_stp, FUNC(vt100_stp_slot_device::tc_dtr_w));
 	m_pusart->rts_handler().set(m_rs232, FUNC(rs232_port_device::write_rts));
 	m_pusart->rxrdy_handler().set(m_rstbuf, FUNC(rst_pos_buffer_device::rst2_w));
 
 	RS232_PORT(config, m_rs232, default_rs232_devices, nullptr);
-	m_rs232->rxd_handler().set(m_pusart, FUNC(i8251_device::write_rxd));
-	m_rs232->dsr_handler().set(m_pusart, FUNC(i8251_device::write_dsr));
+	m_rs232->rxd_handler().set(m_stp, FUNC(vt100_stp_slot_device::line_rxd_w));
+	m_rs232->dsr_handler().set(m_stp, FUNC(vt100_stp_slot_device::line_dsr_w));
+
+	VT100_STP_SLOT(config, m_stp, vt100_stp_options, nullptr);
+	m_stp->tc_rxd_handler().set(m_pusart, FUNC(i8251_device::write_rxd));
+	m_stp->tc_dsr_handler().set(m_pusart, FUNC(i8251_device::write_dsr));
+	m_stp->int_tclk_handler().set(m_pusart, FUNC(i8251_device::write_txc));
+	m_stp->int_rclk_handler().set(m_pusart, FUNC(i8251_device::write_rxc));
+	m_stp->line_txd_handler().set(m_rs232, FUNC(rs232_port_device::write_txd));
+	m_stp->line_dtr_handler().set(m_rs232, FUNC(rs232_port_device::write_dtr));
+
+	// 16 x 15,734 baud, one per scan line on average (TM-003 7-10, Fig 7-3)
+	CLOCK(config, m_localclk, XTAL(24'073'400) * 16 / 1530);
+	m_localclk->signal_handler().set(m_stp, FUNC(vt100_stp_slot_device::local_clk_w));
 
 	com8116_device &dbrg(COM5016_013(config, "dbrg", XTAL(24'883'200) / 9)); // COM5016T-013 (or WD1943CD-02), 2.7648Mhz Clock
-	dbrg.fr_handler().set(m_pusart, FUNC(i8251_device::write_rxc));
-	dbrg.ft_handler().set(m_pusart, FUNC(i8251_device::write_txc));
+	dbrg.fr_handler().set(m_stp, FUNC(vt100_stp_slot_device::tc_rclk_w));
+	dbrg.ft_handler().set(m_stp, FUNC(vt100_stp_slot_device::tc_tclk_w));
 
 	ER1400(config, m_nvr);
 
@@ -472,57 +493,12 @@ void vt100_state::vt100(machine_config &config)
 	RST_POS_BUFFER(config, m_rstbuf).int_callback().set_inputline(m_maincpu, 0);
 }
 
-void vt100_state::stp_mem(address_map &map)
-{
-	map.unmap_value_high();
-	map(0x0000, 0x1fff).rom().region("stp", 0);
-	map(0x2000, 0x27ff).ram();
-}
-
-void vt100_state::stp_io(address_map &map)
-{
-	map(0x80, 0x80).rw("stpusart0", FUNC(i8251_device::data_r), FUNC(i8251_device::data_w));
-	map(0x90, 0x90).rw("stpusart0", FUNC(i8251_device::status_r), FUNC(i8251_device::control_w));
-	map(0xa0, 0xa0).rw("stpusart1", FUNC(i8251_device::data_r), FUNC(i8251_device::data_w));
-	map(0xb0, 0xb0).rw("stpusart1", FUNC(i8251_device::status_r), FUNC(i8251_device::control_w));
-	map(0xc0, 0xc0).rw("stpusart2", FUNC(i8251_device::data_r), FUNC(i8251_device::data_w));
-	map(0xd0, 0xd0).rw("stpusart2", FUNC(i8251_device::status_r), FUNC(i8251_device::control_w));
-}
-
 void vt100_state::vt100ac(machine_config &config)
 {
 	vt100(config);
 
-	m_options |= OPT_STP;
 	m_avo->set_default_option("avo_ac");
-
-	i8085a_cpu_device &stpcpu(I8085A(config, "stpcpu", 4915200));
-	stpcpu.set_addrmap(AS_PROGRAM, &vt100_state::stp_mem);
-	stpcpu.set_addrmap(AS_IO, &vt100_state::stp_io);
-
-	i8251_device &stpusart0(I8251(config, "stpusart0", 2457600));
-	stpusart0.rxrdy_handler().set("stprxint", FUNC(input_merger_device::in_w<0>));
-	stpusart0.txrdy_handler().set("stptxint", FUNC(input_merger_device::in_w<0>));
-
-	i8251_device &stpusart1(I8251(config, "stpusart1", 2457600));
-	stpusart1.rxrdy_handler().set("stprxint", FUNC(input_merger_device::in_w<1>));
-	stpusart1.txrdy_handler().set("stptxint", FUNC(input_merger_device::in_w<1>));
-
-	i8251_device &stpusart2(I8251(config, "stpusart2", 2457600)); // for printer?
-	stpusart2.rxrdy_handler().set("stprxint", FUNC(input_merger_device::in_w<2>));
-	stpusart2.txrdy_handler().set("stptxint", FUNC(input_merger_device::in_w<2>));
-
-	INPUT_MERGER_ANY_HIGH(config, "stptxint").output_handler().set_inputline("stpcpu", I8085_RST55_LINE);
-
-	INPUT_MERGER_ANY_HIGH(config, "stprxint").output_handler().set_inputline("stpcpu", I8085_RST65_LINE);
-
-	com8116_device &dbrg(*subdevice<com8116_device>("dbrg"));
-	dbrg.fr_handler().append("stpusart0", FUNC(i8251_device::write_rxc));
-	dbrg.fr_handler().append("stpusart1", FUNC(i8251_device::write_rxc));
-	dbrg.fr_handler().append("stpusart2", FUNC(i8251_device::write_rxc));
-	dbrg.ft_handler().append("stpusart0", FUNC(i8251_device::write_txc));
-	dbrg.ft_handler().append("stpusart1", FUNC(i8251_device::write_txc));
-	dbrg.ft_handler().append("stpusart2", FUNC(i8251_device::write_txc));
+	m_stp->set_default_option("vt1xxac");
 }
 
 void vt100_state::vt180(machine_config &config)
@@ -557,6 +533,14 @@ void vt100_state::vt101(machine_config &config)
 	m_even_field_high = true;
 
 	config.device_remove("avo"); // no AVO connector; the VT102's is on the board
+
+	// no STP either: the 8251 goes straight to the communication port
+	config.device_remove("stp");
+	config.device_remove("localclk");
+	m_pusart->txd_handler().set(m_rs232, FUNC(rs232_port_device::write_txd));
+	m_pusart->dtr_handler().set(m_rs232, FUNC(rs232_port_device::write_dtr));
+	m_rs232->rxd_handler().set(m_pusart, FUNC(i8251_device::write_rxd));
+	m_rs232->dsr_handler().set(m_pusart, FUNC(i8251_device::write_dsr));
 
 	I8085A(config.replace(), m_maincpu, XTAL(24'073'400) / 4);
 	m_maincpu->set_addrmap(AS_PROGRAM, &vt100_state::vt101_mem);
@@ -805,10 +789,7 @@ ROM_START( vt100ac ) // This is from the VT180 technical manual at http://www.bi
 
 	// AVO ROMs 23-186e2/23-187e2: see vt100_avo.cpp
 
-	ROM_REGION(0x2000, "stp", 0) // stp switches 1 and 5 are closed, 2,3,4 open
-	ROM_LOAD( "23-029e4.stp.e14", 0x0000, 0x2000, CRC(da55c62b) SHA1(261b02b774d57253d1dedecab8ca0e368c2a96cd)) // Label: "S 8218 // C43020 // 23029E4 (C) DEC // TP02" @E14
-	// the ROM dump above MIGHT be in the wrong order: it was dumped with A11 to pin 18, A12 to pin 21, A13 to pin 20, but I'm not sure those assignments to pins are correct.
-	// At worst the 8 parts of it are in the wrong order.
+	// printer port ROM 23-029e4: see vt100_stp.cpp
 
 	ROM_REGION(0x1000, "chargen",0)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
