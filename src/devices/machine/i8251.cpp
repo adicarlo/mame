@@ -184,7 +184,7 @@ void i8251_device::receive_clock()
 
 			// false start bit detection: a start bit must still be low at its
 			// centre, or it was a glitch and the search for one resumes
-			// (8251A data sheet, Receiver Buffer)
+			// (8251A data sheet, Receiver Control and Asynchronous Mode (Receive))
 			if (m_rx_start_check)
 			{
 				m_rx_start_check = false;
@@ -621,7 +621,7 @@ void i8251_device::command_w(uint8_t data)
 		m_ext_syn_set = false;
 
 	// TxD is held marking whenever the transmitter is empty, unless SBRK is
-	// set (8251A data sheet, Transmitter Buffer and Transmitter Control).  A
+	// set (8251A data sheet, Features and Asynchronous Mode (Transmission)).  A
 	// command that clears SBRK, an internal reset included, ends the break
 	// Async only: in sync mode the idle transmitter sends SYNC characters,
 	// and the last bit of a character, which can be 0, is still going out
