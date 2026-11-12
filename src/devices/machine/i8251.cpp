@@ -581,8 +581,13 @@ void i8251_device::command_w(uint8_t data)
 	if (m_hunt_on)
 		m_ext_syn_set = false;
 
+	// TxD is held marking whenever the transmitter is empty, unless SBRK is
+	// set (8251A data sheet, Transmitter Buffer and Transmitter Control).  A
+	// command that clears SBRK, an internal reset included, ends the break
 	if (BIT(data, 3))
 		m_txd_handler(0);
+	else if (is_transmit_register_empty())
+		m_txd_handler(1);
 
 	check_for_tx_start();
 	update_rx_ready();
