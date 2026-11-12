@@ -113,9 +113,13 @@ private:
 	u8 m_options = 0; // set by each model's machine config
 	bool m_even_field_high = false; // VT101/VT102 board wires EVEN FIELD L to +5 V
 
+	u8 m_modem = 0xf0; // modem buffer inputs: CD, RI, SPDI, CTS in D4-D7
+
 	u8 flags_r();
 	u8 modem_r();
+	template <unsigned Bit> void modem_w(int state) { m_modem = (m_modem & ~(1 << Bit)) | (state << Bit); }
 	void nvr_latch_w(u8 data);
+	void brightness_w(u8 data);
 	u8 printer_r(offs_t offset);
 	void printer_w(offs_t offset, u8 data);
 	u8 video_ram_r(offs_t offset);
@@ -237,14 +241,7 @@ u8 vt100_state::flags_r()
 
 u8 vt100_state::modem_r()
 {
-	u8 ret = 0x0f;
-
-	ret |= m_rs232->cts_r() << 7;
-	ret |= m_rs232->si_r() << 6;
-	ret |= m_rs232->ri_r() << 5;
-	ret |= m_rs232->dcd_r() << 4;
-
-	return ret;
+	return m_modem | 0x0f;
 }
 
 void vt100_state::nvr_latch_w(u8 data)
@@ -257,8 +254,21 @@ void vt100_state::nvr_latch_w(u8 data)
 	// C2 is used to disable pullup on data line
 	m_nvr->data_w(BIT(data, 2) ? 1 : !BIT(data, 0));
 
-	// SPDS present on pins 11, 19 and 23 of EIA connector
-	m_rs232->write_spds(BIT(data, 5));
+	// SPDS, on pins 11, 19 and 23 of the EIA connector; on the VT100 board
+	// it passes through the STP
+	if (m_stp)
+		m_stp->write<vt100_stp_slot_device::TC_SPDS>(BIT(data, 5));
+	else
+		m_rs232->write_spds(BIT(data, 5));
+}
+
+void vt100_state::brightness_w(u8 data)
+{
+	m_crtc->brightness_w(data);
+
+	// D5 of the same latch is INIT H to the STP (MP-00633 sheet 4)
+	if (m_stp)
+		m_stp->write<vt100_stp_slot_device::TC_INIT>(BIT(data, 5));
 }
 
 void vt100_state::vt100_io(address_map &map)
@@ -274,7 +284,7 @@ void vt100_state::vt100_io(address_map &map)
 	// 0x42 Flags buffer
 	map(0x42, 0x42).r(FUNC(vt100_state::flags_r));
 	// 0x42 Brightness D/A latch
-	map(0x42, 0x42).w(m_crtc, FUNC(vt100_video_device::brightness_w));
+	map(0x42, 0x42).w(FUNC(vt100_state::brightness_w));
 	// 0x62 NVR latch
 	map(0x62, 0x62).w(FUNC(vt100_state::nvr_latch_w));
 	// 0x82 Keyboard UART data
@@ -356,6 +366,8 @@ void vt100_state::machine_start()
 	m_kbduart->write_swe(0);
 
 	m_pusart->write_cts(0);
+
+	save_item(NAME(m_modem));
 
 	// LOCAL CLK only matters to an STP option; don't run it for nothing
 	if (m_localclk && !m_stp->present())
@@ -456,33 +468,48 @@ void vt100_state::vt100(machine_config &config)
 	m_crtc->lba3_lba4_wr_callback().set(FUNC(vt100_state::uart_clock_w));
 	m_crtc->lba7_wr_callback().set(m_nvr, FUNC(er1400_device::clock_w));
 
-	// The communication port's data, DTR/DSR and the 8251's clocks pass
-	// through the STP (J3), which joins them straight through when empty.
+	// Every signal between the 8251, the modem buffer and the EIA connector
+	// passes through the STP (J3), which joins each pair when it is empty
+	// (MP-00633 sheet 3; pin names in vt100_stp.h).  The 8251's CTS is
+	// grounded; the line's CTS goes only to the modem buffer.
+	using stp = vt100_stp_slot_device;
 	I8251(config, m_pusart, XTAL(24'883'200) / 9);
-	m_pusart->txd_handler().set(m_stp, FUNC(vt100_stp_slot_device::tc_txd_w));
-	m_pusart->dtr_handler().set(m_stp, FUNC(vt100_stp_slot_device::tc_dtr_w));
-	m_pusart->rts_handler().set(m_rs232, FUNC(rs232_port_device::write_rts));
+	m_pusart->txd_handler().set(m_stp, FUNC(stp::write<stp::TC_TXD>));
+	m_pusart->rts_handler().set(m_stp, FUNC(stp::write<stp::TC_RTS>));
+	m_pusart->dtr_handler().set(m_stp, FUNC(stp::write<stp::TC_DTR>));
 	m_pusart->rxrdy_handler().set(m_rstbuf, FUNC(rst_pos_buffer_device::rst2_w));
 
 	RS232_PORT(config, m_rs232, default_rs232_devices, nullptr);
-	m_rs232->rxd_handler().set(m_stp, FUNC(vt100_stp_slot_device::line_rxd_w));
-	m_rs232->dsr_handler().set(m_stp, FUNC(vt100_stp_slot_device::line_dsr_w));
+	m_rs232->rxd_handler().set(m_stp, FUNC(stp::write<stp::LINE_RXD>));
+	m_rs232->cts_handler().set(m_stp, FUNC(stp::write<stp::LINE_CTS>));
+	m_rs232->dsr_handler().set(m_stp, FUNC(stp::write<stp::LINE_DSR>));
+	m_rs232->dcd_handler().set(m_stp, FUNC(stp::write<stp::LINE_CD>));
+	m_rs232->ri_handler().set(m_stp, FUNC(stp::write<stp::LINE_RI>));
+	m_rs232->si_handler().set(m_stp, FUNC(stp::write<stp::LINE_SPDI>));
+	m_rs232->txc_handler().set(m_stp, FUNC(stp::write<stp::EXT_TCLK>));
+	m_rs232->rxc_handler().set(m_stp, FUNC(stp::write<stp::EXT_RCLK>));
 
 	VT100_STP_SLOT(config, m_stp, vt100_stp_options, nullptr);
-	m_stp->tc_rxd_handler().set(m_pusart, FUNC(i8251_device::write_rxd));
-	m_stp->tc_dsr_handler().set(m_pusart, FUNC(i8251_device::write_dsr));
-	m_stp->int_tclk_handler().set(m_pusart, FUNC(i8251_device::write_txc));
-	m_stp->int_rclk_handler().set(m_pusart, FUNC(i8251_device::write_rxc));
-	m_stp->line_txd_handler().set(m_rs232, FUNC(rs232_port_device::write_txd));
-	m_stp->line_dtr_handler().set(m_rs232, FUNC(rs232_port_device::write_dtr));
+	m_stp->pin_handler<stp::LINE_TXD>().set(m_rs232, FUNC(rs232_port_device::write_txd));
+	m_stp->pin_handler<stp::LINE_RTS>().set(m_rs232, FUNC(rs232_port_device::write_rts));
+	m_stp->pin_handler<stp::LINE_DTR>().set(m_rs232, FUNC(rs232_port_device::write_dtr));
+	m_stp->pin_handler<stp::LINE_SPDS>().set(m_rs232, FUNC(rs232_port_device::write_spds));
+	m_stp->pin_handler<stp::TC_RXD>().set(m_pusart, FUNC(i8251_device::write_rxd));
+	m_stp->pin_handler<stp::TC_DSR>().set(m_pusart, FUNC(i8251_device::write_dsr));
+	m_stp->pin_handler<stp::TC_CTS>().set(FUNC(vt100_state::modem_w<7>));
+	m_stp->pin_handler<stp::TC_SPDI>().set(FUNC(vt100_state::modem_w<6>));
+	m_stp->pin_handler<stp::TC_RI>().set(FUNC(vt100_state::modem_w<5>));
+	m_stp->pin_handler<stp::TC_CD>().set(FUNC(vt100_state::modem_w<4>));
+	m_stp->pin_handler<stp::INTERNAL_TCLK>().set(m_pusart, FUNC(i8251_device::write_txc));
+	m_stp->pin_handler<stp::INTERNAL_RCLK>().set(m_pusart, FUNC(i8251_device::write_rxc));
 
 	// 16 x 15,734 baud, one per scan line on average (TM-003 7-10, Fig 7-3)
 	CLOCK(config, m_localclk, XTAL(24'073'400) * 16 / 1530);
-	m_localclk->signal_handler().set(m_stp, FUNC(vt100_stp_slot_device::local_clk_w));
+	m_localclk->signal_handler().set(m_stp, FUNC(stp::write<stp::LOCAL_CLK>));
 
 	com8116_device &dbrg(COM5016_013(config, "dbrg", XTAL(24'883'200) / 9)); // COM5016T-013 (or WD1943CD-02), 2.7648Mhz Clock
-	dbrg.fr_handler().set(m_stp, FUNC(vt100_stp_slot_device::tc_rclk_w));
-	dbrg.ft_handler().set(m_stp, FUNC(vt100_stp_slot_device::tc_tclk_w));
+	dbrg.fr_handler().set(m_stp, FUNC(stp::write<stp::TC_RCLK>));
+	dbrg.ft_handler().set(m_stp, FUNC(stp::write<stp::TC_TCLK>));
 
 	ER1400(config, m_nvr);
 
@@ -544,9 +571,16 @@ void vt100_state::vt101(machine_config &config)
 	config.device_remove("stp");
 	config.device_remove("localclk");
 	m_pusart->txd_handler().set(m_rs232, FUNC(rs232_port_device::write_txd));
+	m_pusart->rts_handler().set(m_rs232, FUNC(rs232_port_device::write_rts));
 	m_pusart->dtr_handler().set(m_rs232, FUNC(rs232_port_device::write_dtr));
 	m_rs232->rxd_handler().set(m_pusart, FUNC(i8251_device::write_rxd));
 	m_rs232->dsr_handler().set(m_pusart, FUNC(i8251_device::write_dsr));
+	m_rs232->cts_handler().set(FUNC(vt100_state::modem_w<7>));
+	m_rs232->si_handler().set(FUNC(vt100_state::modem_w<6>));
+	m_rs232->ri_handler().set(FUNC(vt100_state::modem_w<5>));
+	m_rs232->dcd_handler().set(FUNC(vt100_state::modem_w<4>));
+	m_rs232->txc_handler().set_nop();
+	m_rs232->rxc_handler().set_nop();
 
 	I8085A(config.replace(), m_maincpu, XTAL(24'073'400) / 4);
 	m_maincpu->set_addrmap(AS_PROGRAM, &vt100_state::vt101_mem);

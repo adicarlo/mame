@@ -14,10 +14,10 @@
     video timing) to clock the terminal's 8251 and its own local UART, and
     raises OPTION PRESENT, which the firmware reads from the flag buffer.
 
-    Only the pairs an option here breaks are modelled: TXD, RXD, DTR, DSR
-    and the terminal 8251's clocks.  RTS, CTS, CD, RI and the speed lines
-    still go straight between the terminal and the RS-232 port.  TC INIT
-    isn't modelled; options reset with the machine.
+    Every signal on the connector is modelled (TM-003 7.5.3, MP-00633
+    sheet 3).  TC INIT is bit 5 of the brightness D/A latch (MP-00633 sheet
+    4): high while the terminal initialises, at power-up, on RIS and before
+    a confidence test.
 
     Source: VT100 technical manual EK-VT100-TM-003, chapter 7 (STP Option
     Interface Guide), 4.1.5.18 and 4.3.15.
@@ -43,12 +43,7 @@ DEFINE_DEVICE_TYPE(VT100_STP_SLOT, vt100_stp_slot_device, "vt100_stp_slot", "DEC
 vt100_stp_slot_device::vt100_stp_slot_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock)
 	: device_t(mconfig, VT100_STP_SLOT, tag, owner, clock)
 	, device_single_card_slot_interface<device_vt100_stp_interface>(mconfig, *this)
-	, m_tc_rxd(*this)
-	, m_tc_dsr(*this)
-	, m_int_tclk(*this)
-	, m_int_rclk(*this)
-	, m_line_txd(*this)
-	, m_line_dtr(*this)
+	, m_out(*this)
 	, m_card(nullptr)
 {
 }
@@ -62,61 +57,11 @@ void vt100_stp_slot_device::device_start()
 {
 }
 
-// With no option the contact pairs short, joining each terminal signal to
-// its line signal; LOCAL CLK goes nowhere.
-
-void vt100_stp_slot_device::tc_txd_w(int state)
+// A closed pair joins pin 2n-1 to pin 2n.  EXT TCLK, EXT RCLK, LOCAL CLK and
+// TC INIT have nothing on the other side of their pairs, so they go nowhere.
+void vt100_stp_slot_device::join(unsigned pin, int state)
 {
-	if (m_card)
-		m_card->tc_txd_w(state);
-	else
-		m_line_txd(state);
-}
-
-void vt100_stp_slot_device::tc_dtr_w(int state)
-{
-	if (m_card)
-		m_card->tc_dtr_w(state);
-	else
-		m_line_dtr(state);
-}
-
-void vt100_stp_slot_device::tc_tclk_w(int state)
-{
-	if (m_card)
-		m_card->tc_tclk_w(state);
-	else
-		m_int_tclk(state);
-}
-
-void vt100_stp_slot_device::tc_rclk_w(int state)
-{
-	if (m_card)
-		m_card->tc_rclk_w(state);
-	else
-		m_int_rclk(state);
-}
-
-void vt100_stp_slot_device::local_clk_w(int state)
-{
-	if (m_card)
-		m_card->local_clk_w(state);
-}
-
-void vt100_stp_slot_device::line_rxd_w(int state)
-{
-	if (m_card)
-		m_card->line_rxd_w(state);
-	else
-		m_tc_rxd(state);
-}
-
-void vt100_stp_slot_device::line_dsr_w(int state)
-{
-	if (m_card)
-		m_card->line_dsr_w(state);
-	else
-		m_tc_dsr(state);
+	m_out[(pin & 1) ? (pin + 1) : (pin - 1)](state);
 }
 
 
@@ -205,13 +150,7 @@ public:
 	{
 	}
 
-	virtual void tc_txd_w(int state) override { m_local->write_rxd(state); }
-	virtual void tc_dtr_w(int state) override { m_local->write_dsr(state); }
-	virtual void tc_tclk_w(int state) override { m_line->write_txc(state); }
-	virtual void tc_rclk_w(int state) override { m_line->write_rxc(state); }
-	virtual void local_clk_w(int state) override;
-	virtual void line_rxd_w(int state) override { m_line->write_rxd(state); }
-	virtual void line_dsr_w(int state) override { m_line->write_dsr(state); slot().opt_tc_dsr_w(state); }
+	virtual void stp_w(unsigned pin, int state) override;
 
 protected:
 	virtual void device_start() override ATTR_COLD;
@@ -236,6 +175,7 @@ private:
 	template <u32 N> void txrdy_w(int state) { m_txrdy = (m_txrdy & ~(1 << N)) | (state << N); txint_update(); }
 	template <u32 N> void rts_w(int state) { m_rts = (m_rts & ~(1 << N)) | (state << N); txint_update(); }
 	void txint_update();
+	void local_clk_w(int state);
 
 	void brg_w(offs_t offset, u8 data);
 
@@ -298,8 +238,40 @@ void vt100_stp_ac_device::local_clk_w(int state)
 	// LOCAL CLK clocks both ends of the local link
 	m_local->write_txc(state);
 	m_local->write_rxc(state);
-	slot().opt_int_tclk_w(state);
-	slot().opt_int_rclk_w(state);
+	slot().drive(vt100_stp_slot_device::INTERNAL_TCLK, state);
+	slot().drive(vt100_stp_slot_device::INTERNAL_RCLK, state);
+}
+
+void vt100_stp_ac_device::stp_w(unsigned pin, int state)
+{
+	using stp = vt100_stp_slot_device;
+	switch (pin)
+	{
+	case stp::TC_TXD:    m_local->write_rxd(state); break;
+	case stp::TC_DTR:    m_local->write_dsr(state); break;
+	case stp::TC_TCLK:   m_line->write_txc(state); break;
+	case stp::TC_RCLK:   m_line->write_rxc(state); break;
+	case stp::LOCAL_CLK: local_clk_w(state); break;
+	case stp::LINE_RXD:  m_line->write_rxd(state); break;
+	case stp::LINE_DSR:  m_line->write_dsr(state); slot().join(pin, state); break;
+
+	// TC INIT holds the card in reset (assumed: TM-003 7.4.2.4 asks options
+	// to reset on it).  The 8251s are reset with the 8085: the firmware
+	// writes their mode words (00D4, 018D, 0192) without the software reset
+	// sequence, so it expects them fresh from a hardware reset.
+	case stp::TC_INIT:
+		m_cpu->set_input_line(INPUT_LINE_RESET, state ? ASSERT_LINE : CLEAR_LINE);
+		if (state)
+		{
+			m_line->reset();
+			m_local->reset();
+			m_prt->reset();
+		}
+		break;
+
+	// the modem lines and the speed lines pass through (assumed)
+	default:             slot().join(pin, state); break;
+	}
 }
 
 void vt100_stp_ac_device::txint_update()
@@ -339,14 +311,14 @@ void vt100_stp_ac_device::device_add_mconfig(machine_config &config)
 	INPUT_MERGER_ANY_HIGH(config, m_rxint).output_handler().set_inputline(m_cpu, I8085_RST65_LINE);
 
 	I8251(config, m_line, 4.9152_MHz_XTAL / 2);
-	m_line->txd_handler().set(DEVICE_SELF_OWNER, FUNC(vt100_stp_slot_device::opt_line_txd_w));
-	m_line->dtr_handler().set(DEVICE_SELF_OWNER, FUNC(vt100_stp_slot_device::opt_line_dtr_w));
+	m_line->txd_handler().set(FUNC(vt100_stp_ac_device::drive_w<vt100_stp_slot_device::LINE_TXD>));
+	m_line->dtr_handler().set(FUNC(vt100_stp_ac_device::drive_w<vt100_stp_slot_device::LINE_DTR>));
 	m_line->rxrdy_handler().set(m_rxint, FUNC(input_merger_device::in_w<0>));
 	m_line->txrdy_handler().set(FUNC(vt100_stp_ac_device::txrdy_w<0>));
 	m_line->rts_handler().set(FUNC(vt100_stp_ac_device::rts_w<0>));
 
 	I8251(config, m_local, 4.9152_MHz_XTAL / 2);
-	m_local->txd_handler().set(DEVICE_SELF_OWNER, FUNC(vt100_stp_slot_device::opt_tc_rxd_w));
+	m_local->txd_handler().set(FUNC(vt100_stp_ac_device::drive_w<vt100_stp_slot_device::TC_RXD>));
 	m_local->rxrdy_handler().set(m_rxint, FUNC(input_merger_device::in_w<1>));
 	m_local->txrdy_handler().set(FUNC(vt100_stp_ac_device::txrdy_w<1>));
 	m_local->rts_handler().set(FUNC(vt100_stp_ac_device::rts_w<1>));
