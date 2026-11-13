@@ -50,6 +50,7 @@
 #include "vt100_gport.h"
 #include "vt100_kbd.h"
 #include "vt100_stp.h"
+#include "vt125_cable.h"
 #include "vtvideo.h"
 #include "screen.h"
 
@@ -88,6 +89,7 @@ public:
 	void vt101(machine_config &config) ATTR_COLD;
 	void vt102(machine_config &config) ATTR_COLD;
 	void vt105(machine_config &config) ATTR_COLD;
+	void vt125(machine_config &config) ATTR_COLD;
 	void vt180(machine_config &config) ATTR_COLD;
 
 private:
@@ -254,9 +256,12 @@ void vt100_state::brightness_w(u8 data)
 {
 	m_crtc->brightness_w(data);
 
-	// D5 of the same latch is INIT H to the STP (MP-00633 sheet 4)
+	// D5 of the same latch is INIT H to the STP (MP-00633 sheet 4) and,
+	// taken to be the same net, to the graphics connector (TM-003 8.1)
 	if (m_stp)
 		m_stp->write<vt100_stp_slot_device::TC_INIT>(BIT(data, 5));
+	if (m_graphics)
+		m_graphics->init_w(BIT(data, 5));
 }
 
 void vt100_state::vt100_io(address_map &map)
@@ -360,6 +365,16 @@ void vt100_state::machine_start()
 	// LOCAL CLK only matters to an STP option; don't run it for nothing
 	if (m_localclk && !m_stp->present())
 		m_localclk->set_clock(0);
+
+	// the VT125's two boards, on the graphics connector and in the STP,
+	// talk over their own cable
+	auto *const mono = m_graphics ? dynamic_cast<vt125_mono_cable_interface *>(m_graphics->get_card_device()) : nullptr;
+	auto *const paddle = m_stp ? dynamic_cast<vt125_paddle_cable_interface *>(m_stp->get_card_device()) : nullptr;
+	if (mono && paddle)
+	{
+		mono->connect(*paddle);
+		paddle->connect(*mono);
+	}
 
 	if (m_printer_uart.found())
 	{
@@ -530,6 +545,17 @@ void vt100_state::vt180(machine_config &config)
 	// the VT18X's paddle board takes the STP; its control module, in the
 	// expansion backplane, takes only power from it
 	m_stp->set_default_option("vt18x");
+}
+
+// VT125: the VT1XX-CB/-CL kit's mono board (graphics processor) on the
+// graphics connector and its paddle board in the STP; the kit also went
+// into a VT100 or VT105 (User Guide ch10)
+void vt100_state::vt125(machine_config &config)
+{
+	vt100(config);
+
+	m_graphics->set_default_option("vt125");
+	m_stp->set_default_option("vt125");
 }
 
 // VT105: a VT100 with the M7071 waveform generator on the graphics
@@ -866,12 +892,11 @@ ROM_START( vt110 )
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 //DECDataway board ROMs go here!
 ROM_END
+#endif
 
-ROM_START( vt125 ) // This is from bitsavers and vt100.net, as the vt125 schematics are not scanned
-// This is the standard VT100 CPU board with the 'normal' ROMs (but later rev of EPROM 0) populated but with a
-// special "GPO" ReGIS CPU+RAM card 54-14277 installed which provides a framebuffer, text rotation, custom RAM fonts, and many other features.
-// Comes with a custom 'dumb' STP card 54-14275 as well.
-// VT125 upgrade kit (upgrade from vt100 or vt105) was called VT1xx-CB or CL
+ROM_START( vt125 )
+// The standard VT100 terminal controller with its ROMs; the kit needs 23-061E2 or later in E56
+// (User Guide ch10).  The graphics processor's ROMs are on the mono board, vt125_mono.cpp.
 	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
 	ROM_LOAD( "23-061e2-00.e56", 0x0000, 0x0800, CRC(3dae97ff) SHA1(e3437850c33565751b86af6c2fe270a491246d15)) // version 2 1980 'later ROM'
 	ROM_LOAD( "23-032e2-00.e52", 0x0800, 0x0800, CRC(3d86db99) SHA1(cdd8bdecdc643442f6e7d2c83cf002baf8101867))
@@ -880,28 +905,7 @@ ROM_START( vt125 ) // This is from bitsavers and vt100.net, as the vt125 schemat
 
 	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-
-	// "GPO" aka vt125 "mono board" ROMs and PROMs
-	ROM_REGION(0x10000, "monocpu", ROMREGION_ERASEFF) // ROMs for the 8085 sub-CPU
-	ROM_LOAD( "23-043e4-00.e22", 0x0000, 0x2000, NO_DUMP) // 2364/MK36xxx mask ROM
-	ROM_LOAD( "23-044e4-00.e23", 0x2000, 0x2000, NO_DUMP) // 2364/MK36xxx mask ROM
-	ROM_LOAD( "23-045e4-00.e24", 0x4000, 0x2000, NO_DUMP) // 2364/MK36xxx mask ROM
-	// E25 socket is empty
-
-	ROM_REGION(0x100, "dir", ROMREGION_ERASEFF ) // vt125 direction PROM, same as on vk100, 82s135 equiv
-	ROM_LOAD( "23-059b1.e41", 0x0000, 0x0100, CRC(4b63857a) SHA1(3217247d983521f0b0499b5c4ef6b5de9844c465))
-
-	ROM_REGION(0x100, "trans", ROMREGION_ERASEFF ) // vt125 x translate PROM, same as on vk100, 82s135 equiv
-	ROM_LOAD( "23-060b1.e60", 0x0000, 0x0100, CRC(198317fc) SHA1(00e97104952b3fbe03a4f18d800d608b837d10ae))
-
-	ROM_REGION(0x500, "proms", ROMREGION_ERASEFF) // vt125 mono board PROMs
-	ROM_LOAD( "23-067b1.e135", 0x0000, 0x0100, NO_DUMP) // 82s135, waitstate PROM
-	ROM_LOAD( "23-068b1.e64", 0x0100, 0x0100, NO_DUMP) // 82s135, sync_a PROM
-	ROM_LOAD( "23-069b1.e66", 0x0200, 0x0100, NO_DUMP) // 82s135, sync_b PROM
-	ROM_LOAD( "23-070b1.e71", 0x0300, 0x0100, NO_DUMP) // 82s135, vector prom
-	ROM_LOAD( "23-582a2.e93", 0x0400, 0x0100, NO_DUMP) // 82s129, RAS/erase PROM
 ROM_END
-#endif
 
 ROM_START( vt101 ) // p/n 5414185-00 'unupgradable/low cost' vt101/vt102/vt131 mainboard
 // does not have integrated STP or AVO populated
@@ -979,7 +983,7 @@ COMP( 1981, vt102,   0,      0,      vt102,   vt100, vt100_state, empty_init, "D
 //COMP( 1979, vt103,   vt100,  0,      vt100,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT103",    MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
 COMP( 1978, vt105,   vt100,  0,      vt105,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT105",    MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
 //COMP( 1978, vt110,   vt100,  0,      vt100,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT110",    MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
-//COMP( 1981, vt125,   vt100,  0,      vt100,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT125",    MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
+COMP( 1981, vt125,   vt100,  0,      vt125,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT125",    MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
 COMP( 1981, vt131,   vt102,  0,      vt102,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT131",    MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
 //COMP( 1979, vt132,   vt100,  0,      vt100,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT132",    MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
 COMP( 1983, vt180,   vt100,  0,      vt180,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT180",    MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)

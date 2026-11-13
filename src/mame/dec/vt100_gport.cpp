@@ -47,6 +47,12 @@ int vt100_gport_slot_device::flag_r()
 	return m_card ? m_card->flag_r() : 1;
 }
 
+void vt100_gport_slot_device::init_w(int state)
+{
+	if (m_card)
+		m_card->init_w(state);
+}
+
 int vt100_gport_slot_device::scan(int line, u8 *dots)
 {
 	return m_card ? m_card->scan(line, dots) : NONE;
@@ -63,4 +69,5 @@ device_vt100_gport_interface::device_vt100_gport_interface(const machine_config 
 void vt100_gport_options(device_slot_interface &device)
 {
 	device.option_add("m7071", VT105_WG);
+	device.option_add("vt125", VT125_MONO);
 }

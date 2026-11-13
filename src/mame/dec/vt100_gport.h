@@ -43,6 +43,9 @@ public:
 	// GRAPHICS FLAG L: high (1) when nothing is fitted or the card is busy
 	int flag_r();
 
+	// INIT H (pin 13): high while the VT100 initialises
+	void init_w(int state);
+
 	// GRAPHICS 1/2 IN L for scan line 'line', counted from the end of
 	// vertical blank: 512 dots, nonzero = lit
 	int scan(int line, u8 *dots); // a format_t, for the video device's callback
@@ -64,6 +67,7 @@ public:
 	virtual void write(u8 data) = 0;
 	virtual int flag_r() = 0;
 	virtual vt100_gport_slot_device::format_t scan(int line, u8 *dots) = 0;
+	virtual void init_w(int state) { }
 
 protected:
 	device_vt100_gport_interface(const machine_config &mconfig, device_t &device);
@@ -77,6 +81,7 @@ private:
 
 DECLARE_DEVICE_TYPE(VT100_GPORT_SLOT, vt100_gport_slot_device)
 DECLARE_DEVICE_TYPE(VT105_WG, device_vt100_gport_interface)
+DECLARE_DEVICE_TYPE(VT125_MONO, device_vt100_gport_interface)
 
 void vt100_gport_options(device_slot_interface &device);
 
