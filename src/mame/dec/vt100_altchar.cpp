@@ -17,7 +17,8 @@
 
     The only DEC alternate ROM known is 23-094E2, fitted to the VT100-WC to
     -WZ foreign language word processing terminals.  Its contents are
-    inferred to be European accented characters; it is not dumped.
+    inferred to be European accented characters; it is not dumped, so no
+    card is offered yet.
 
     Sources: VT100 technical manual EK-VT100-TM-003, 6.2.4; MP-00633 print
     set.
@@ -59,49 +60,8 @@ device_vt100_altchar_interface::device_vt100_altchar_interface(const machine_con
 }
 
 
-namespace {
-
-//**************************************************************************
-//  23-094E2
-//**************************************************************************
-
-class vt100_altchar_23_094e2_device : public device_t, public device_vt100_altchar_interface
+// No dumped alternate ROM yet: the socket is empty until one is (23-094E2
+// is the card to add then).
+void vt100_altchar_options(device_slot_interface &)
 {
-public:
-	vt100_altchar_23_094e2_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock)
-		: device_t(mconfig, VT100_ALTCHAR_23_094E2, tag, owner, clock)
-		, device_vt100_altchar_interface(mconfig, *this)
-		, m_rom(*this, "rom")
-	{
-	}
-
-	virtual u8 read(offs_t offset) override { return m_rom[offset & 0x7ff]; }
-
-protected:
-	virtual const tiny_rom_entry *device_rom_region() const override ATTR_COLD;
-	virtual void device_start() override ATTR_COLD { }
-
-private:
-	required_region_ptr<u8> m_rom;
-};
-
-ROM_START( vt100_altchar_23_094e2 )
-	ROM_REGION(0x0800, "rom", ROMREGION_ERASE00)
-	ROM_LOAD( "23-094e2-00", 0x0000, 0x0800, NO_DUMP)
-ROM_END
-
-const tiny_rom_entry *vt100_altchar_23_094e2_device::device_rom_region() const
-{
-	return ROM_NAME(vt100_altchar_23_094e2);
-}
-
-} // anonymous namespace
-
-
-DEFINE_DEVICE_TYPE_PRIVATE(VT100_ALTCHAR_23_094E2, device_vt100_altchar_interface, vt100_altchar_23_094e2_device, "vt100_altchar_23_094e2", "DEC 23-094E2 alternate character ROM")
-
-
-void vt100_altchar_options(device_slot_interface &device)
-{
-	device.option_add("23_094e2", VT100_ALTCHAR_23_094E2);
 }

@@ -24,7 +24,7 @@ class device_vt100_stp_interface;
 class vt100_stp_slot_device : public device_t, public device_single_card_slot_interface<device_vt100_stp_interface>
 {
 public:
-	enum : unsigned
+	enum : u32
 	{
 		LINE_TXD = 1,       // out to the EIA connector
 		TC_TXD = 2,         // in from the TC 8251
@@ -60,25 +60,22 @@ public:
 	vt100_stp_slot_device(const machine_config &mconfig, const char *tag, device_t *owner, T &&opts, const char *dflt)
 		: vt100_stp_slot_device(mconfig, tag, owner, 0)
 	{
-		option_reset();
-		opts(*this);
-		set_default_option(dflt);
-		set_fixed(false);
+		set_options(std::forward<T>(opts), dflt, false);
 	}
 
 	vt100_stp_slot_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock = 0);
 
 	// a signal entering the connector on PIN, from the terminal or the line
-	template <unsigned Pin> void write(int state);
+	template <u32 Pin> void write(int state);
 
 	// a signal leaving the connector on PIN
-	template <unsigned Pin> auto pin_handler() { return m_out[Pin].bind(); }
+	template <u32 Pin> auto pin_handler() { return m_out[Pin].bind(); }
 
 	// from the card: drive PIN, which must be one that signals leave on
-	void drive(unsigned pin, int state) { m_out[pin](state); }
+	void drive(u32 pin, int state) { m_out[pin](state); }
 
 	// from the card: join PIN to its partner, as the empty connector does
-	void join(unsigned pin, int state);
+	void join(u32 pin, int state);
 
 	// OPTION PRESENT H (pin 34): pulled up on the TC, grounded through
 	// pin 33 by the closed pair, so high whenever a card is in
@@ -99,7 +96,7 @@ class device_vt100_stp_interface : public device_interface
 public:
 	// A signal entered the connector on PIN.  By default the card joins
 	// each pair through; a card overrides this for the pins it uses.
-	virtual void stp_w(unsigned pin, int state) { slot().join(pin, state); }
+	virtual void stp_w(u32 pin, int state) { slot().join(pin, state); }
 
 protected:
 	device_vt100_stp_interface(const machine_config &mconfig, device_t &device);
@@ -107,14 +104,14 @@ protected:
 	vt100_stp_slot_device &slot() const { return *m_slot; }
 
 	// for binding a card's outputs to the pins signals leave on
-	template <unsigned Pin> void drive_w(int state) { m_slot->drive(Pin, state); }
+	template <u32 Pin> void drive_w(int state) { m_slot->drive(Pin, state); }
 
 private:
 	vt100_stp_slot_device *const m_slot;
 };
 
 
-template <unsigned Pin>
+template <u32 Pin>
 void vt100_stp_slot_device::write(int state)
 {
 	if (m_card)

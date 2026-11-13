@@ -79,8 +79,7 @@ public:
 		m_stp(*this, "stp"),
 		m_graphics(*this, "graphics"),
 		m_localclk(*this, "localclk"),
-		m_altchar(*this, "altchar"),
-		m_chargen(*this, "chargen")
+		m_altchar(*this, "altchar")
 	{
 	}
 
@@ -114,16 +113,14 @@ private:
 	optional_device<vt100_gport_slot_device> m_graphics; // VT100 board graphics connector (J2)
 	optional_device<clock_device> m_localclk; // LOCAL CLK to the STP
 	required_device<vt100_altchar_slot_device> m_altchar; // alternate character ROM socket (E9; E4 on the VT101/VT102)
-	required_region_ptr<u8> m_chargen;
 	u8 m_options = 0; // set by each model's machine config
 	bool m_even_field_high = false; // VT101/VT102 board wires EVEN FIELD L to +5 V
 
 	u8 m_modem = 0xf0; // modem buffer inputs: CD, RI, SPDI, CTS in D4-D7
 
 	u8 flags_r();
-	int graphics_scan(int line, u8 *dots) { return m_graphics ? m_graphics->scan(line, dots) : 0; }
 	u8 modem_r();
-	template <unsigned Bit> void modem_w(int state) { m_modem = (m_modem & ~(1 << Bit)) | (state << Bit); }
+	template <u32 Bit> void modem_w(int state) { m_modem = (m_modem & ~(1 << Bit)) | (state << Bit); }
 	void nvr_latch_w(u8 data);
 	void brightness_w(u8 data);
 	u8 printer_r(offs_t offset);
@@ -360,11 +357,6 @@ void vt100_state::machine_start()
 
 	save_item(NAME(m_modem));
 
-	// the alternate character ROM socket is the character generator's top half
-	for (offs_t i = 0; i < 0x800; i++)
-		m_chargen[0x800 + i] = m_altchar->read(i);
-	subdevice<gfxdecode_device>("gfxdecode")->gfx(0)->mark_all_dirty();
-
 	// LOCAL CLK only matters to an STP option; don't run it for nothing
 	if (m_localclk && !m_stp->present())
 		m_localclk->set_clock(0);
@@ -419,7 +411,7 @@ void vt100_state::uart_clock_w(u8 data)
 static const gfx_layout vt100_charlayout =
 {
 	8, 16,                  /* 8 x 16 characters */
-	256,                    /* 2 x 128 characters */
+	128,                    /* 128 characters; 128-255 are the alternate character ROM socket */
 	1,                      /* 1 bits per pixel */
 	{ 0 },                  /* no bitplanes */
 	/* x offsets */
@@ -461,7 +453,8 @@ void vt100_state::vt100(machine_config &config)
 	VT100_VIDEO(config, m_crtc, XTAL(24'073'400));
 	m_crtc->set_screen("screen");
 	m_crtc->set_chargen("chargen");
-	m_crtc->set_graphics_callback(FUNC(vt100_state::graphics_scan));
+	m_crtc->set_graphics_callback(m_graphics, FUNC(vt100_gport_slot_device::scan));
+	m_crtc->set_altchar_callback(m_altchar, FUNC(vt100_altchar_slot_device::read));
 	VT100_ALTCHAR_SLOT(config, m_altchar, vt100_altchar_options, nullptr);
 	m_crtc->ram_rd_callback().set(FUNC(vt100_state::video_ram_r));
 	m_crtc->vert_freq_intr_wr_callback().set(m_rstbuf, FUNC(rst_pos_buffer_device::rst4_w));
@@ -561,6 +554,7 @@ void vt100_state::vt101(machine_config &config)
 
 	config.device_remove("avo"); // no AVO connector; the VT102's is on the board
 	config.device_remove("graphics"); // no graphics connector (GRAPHICS FLAG L tied high)
+	m_crtc->set_graphics_callback(nullptr);
 
 	// no STP either: the 8251 goes straight to the communication port.  The
 	// board's J3 is only the 20 mA adapter's TXD/RXD header (MP-01066 sheet
@@ -750,17 +744,14 @@ ROM_START( vt100 ) // This is from the schematics at http://www.bitsavers.org/pd
 	ROMX_LOAD( "23-032e2-00.e52", 0x0800, 0x0800, CRC(3d86db99) SHA1(cdd8bdecdc643442f6e7d2c83cf002baf8101867), ROM_BIOS(1))
 	ROMX_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64), ROM_BIOS(1))
 	ROMX_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833), ROM_BIOS(1))
-	// The 23-180E2 set, believed to be the word processing firmware of the
-	// VT100-W models (the foreign language ones take the 23-094E2 alternate
-	// character ROM: see vt100_altchar.cpp), possibly the VT1xx-CE kit; the
-	// newer VT132 set shares these ROMs.  The VT103-04/-05 can use it too.
-	ROM_SYSTEM_BIOS( 2, "vt100w", "VT100-W word processing ROMs?" )
-	ROMX_LOAD( "23-180e2-00.e56", 0x0000, 0x0800, NO_DUMP, ROM_BIOS(2))
-	ROMX_LOAD( "23-181e2-00.e52", 0x0800, 0x0800, NO_DUMP, ROM_BIOS(2))
-	ROMX_LOAD( "23-182e2-00.e45", 0x1000, 0x0800, NO_DUMP, ROM_BIOS(2))
-	ROMX_LOAD( "23-183e2-00.e40", 0x1800, 0x0800, NO_DUMP, ROM_BIOS(2))
+	// Not dumped, so not offered: the 23-180E2..183E2 set (E56, E52, E45,
+	// E40), believed to be the word processing firmware of the VT100-W
+	// models (the foreign language ones also take the 23-094E2 alternate
+	// character ROM: see vt100_altchar.cpp), possibly the VT1xx-CE kit;
+	// the newer VT132 set shares these ROMs.  The VT103-04/-05 can use it
+	// too.  It becomes a BIOS option here once dumped.
 
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
+	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 ROM_END
 
@@ -798,7 +789,7 @@ ROM_START( vt132 ) // This is from anecdotal evidence and vt100.net, as the vt13
 	ROM_LOAD( "23-238e2-00.e13", 0x1000, 0x0800, NO_DUMP)
 	ROM_LOAD( "23-239e2-00.e8", 0x1800, 0x0800, NO_DUMP)
 
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
+	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 ROM_END
 #endif
@@ -819,7 +810,7 @@ ROM_START( vt100ac ) // This is from the VT180 technical manual at http://www.bi
 
 	// printer port ROM 23-029e4: see vt100_stp.cpp
 
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
+	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 ROM_END
 
@@ -835,7 +826,7 @@ ROM_START( vt103 ) // This is from the schematics at http://www.bitsavers.org/pd
 	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
 	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
 
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
+	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 
 	ROM_REGION(0x0800, "tapecpu", 0) // ROM for the 8085 CPU in the integrated serial tu58-xa drive
@@ -856,7 +847,7 @@ ROM_START( vt105 ) // This is from anecdotal evidence and vt100.net, as the vt10
 	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
 	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
 
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
+	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 ROM_END
 
@@ -871,7 +862,7 @@ ROM_START( vt110 )
 	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
 	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
 
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
+	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 //DECDataway board ROMs go here!
 ROM_END
@@ -887,7 +878,7 @@ ROM_START( vt125 ) // This is from bitsavers and vt100.net, as the vt125 schemat
 	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
 	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
 
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
+	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 
 	// "GPO" aka vt125 "mono board" ROMs and PROMs
@@ -921,7 +912,7 @@ ROM_START( vt101 ) // p/n 5414185-00 'unupgradable/low cost' vt101/vt102/vt131 m
 	// E67 socket is empty/unpopulated on vt101
 	// DIP40 at E74 in the lower right corner of MB in vt101 (WD8250 UART) is absent
 
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
+	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e3", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 ROM_END
 
@@ -940,7 +931,7 @@ ROM_START( vt102 ) // p/n 5414185-01 'unupgradable/low cost' vt101/vt102/vt131 m
 	ROMX_LOAD( "23-225e4-00.e69", 0x8000, 0x2000, CRC(3567c760) SHA1(672473162e9c92cd237e4dbf92c2700a31c5374b), ROM_BIOS(1)) // shared with vt131
 	//e67 socket is empty on vt102 but populated on vt131 below
 
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
+	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e3", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 ROM_END
 
@@ -958,7 +949,7 @@ ROM_START( vt131 ) // p/n 5414185-01 'unupgradable/low cost' vt101/vt131 mainboa
 	ROMX_LOAD( "23-225e4-00.e69", 0x8000, 0x2000, CRC(3567c760) SHA1(672473162e9c92cd237e4dbf92c2700a31c5374b), ROM_BIOS(1)) // shared with vt102
 	ROM_LOAD( "23-280e2-00.e67", 0xA000, 0x0800, CRC(71b4172e) SHA1(5a82c7dc313bb92b9829eb8350840e072825a797)) // called "VT131 ROM" in the vt101 quick reference guide; pins 20, 18 and 21 are /CE /CE2 and /CE3 on this mask ROM
 
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
+	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e3", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 ROM_END
 
@@ -971,7 +962,7 @@ ROM_START( vt180 )
 	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
 	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
 
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
+	ROM_REGION(0x0800, "chargen", 0) // 128-255 come from the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 ROM_END
 

@@ -24,23 +24,18 @@ public:
 	{
 		NONE = 0,
 		RECTANGULAR,    // 512 dots at 10.4 MHz
-		SQUARE          // 480 visible dots at 12.4 MHz
+		SQUARE          // 512 dots at 12.4 MHz, all on screen (TM-003 figure 6-19)
 	};
 
 	template <typename T, typename U>
 	vt100_gport_slot_device(const machine_config &mconfig, const char *tag, device_t *owner, T &&opts, const char *dflt, U &&screen_tag)
 		: vt100_gport_slot_device(mconfig, tag, owner, 0)
 	{
-		option_reset();
-		opts(*this);
-		set_default_option(dflt);
-		set_fixed(false);
+		set_options(std::forward<T>(opts), dflt, false);
 		m_screen.set_tag(std::forward<U>(screen_tag));
 	}
 
 	vt100_gport_slot_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock = 0);
-
-	bool present() const { return m_card != nullptr; }
 
 	// GRAPHIC WRITE L strobe from port E2
 	void write(u8 data);
@@ -50,7 +45,7 @@ public:
 
 	// GRAPHICS 1/2 IN L for scan line 'line', counted from the end of
 	// vertical blank: 512 dots, nonzero = lit
-	format_t scan(int line, u8 *dots);
+	int scan(int line, u8 *dots); // a format_t, for the video device's callback
 
 protected:
 	virtual void device_start() override ATTR_COLD;

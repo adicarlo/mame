@@ -47,7 +47,7 @@ int vt100_gport_slot_device::flag_r()
 	return m_card ? m_card->flag_r() : 1;
 }
 
-vt100_gport_slot_device::format_t vt100_gport_slot_device::scan(int line, u8 *dots)
+int vt100_gport_slot_device::scan(int line, u8 *dots)
 {
 	return m_card ? m_card->scan(line, dots) : NONE;
 }

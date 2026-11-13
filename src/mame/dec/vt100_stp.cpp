@@ -48,6 +48,8 @@ vt100_stp_slot_device::vt100_stp_slot_device(const machine_config &mconfig, cons
 {
 }
 
+// Found before any device starts, so a pin written while the terminal's
+// devices start already reaches the card rather than the empty connector.
 void vt100_stp_slot_device::device_resolve_objects()
 {
 	m_card = get_card_device();
@@ -59,7 +61,7 @@ void vt100_stp_slot_device::device_start()
 
 // A closed pair joins pin 2n-1 to pin 2n.  EXT TCLK, EXT RCLK, LOCAL CLK and
 // TC INIT have nothing on the other side of their pairs, so they go nowhere.
-void vt100_stp_slot_device::join(unsigned pin, int state)
+void vt100_stp_slot_device::join(u32 pin, int state)
 {
 	m_out[(pin & 1) ? (pin + 1) : (pin - 1)](state);
 }
@@ -150,7 +152,7 @@ public:
 	{
 	}
 
-	virtual void stp_w(unsigned pin, int state) override;
+	virtual void stp_w(u32 pin, int state) override;
 
 protected:
 	virtual void device_start() override ATTR_COLD;
@@ -242,7 +244,7 @@ void vt100_stp_ac_device::local_clk_w(int state)
 	slot().drive(vt100_stp_slot_device::INTERNAL_RCLK, state);
 }
 
-void vt100_stp_ac_device::stp_w(unsigned pin, int state)
+void vt100_stp_ac_device::stp_w(u32 pin, int state)
 {
 	using stp = vt100_stp_slot_device;
 	switch (pin)
@@ -387,7 +389,7 @@ public:
 	{
 	}
 
-	virtual void stp_w(unsigned pin, int state) override;
+	virtual void stp_w(u32 pin, int state) override;
 
 protected:
 	virtual void device_start() override ATTR_COLD { }
@@ -398,7 +400,7 @@ private:
 	required_device<rs232_port_device> m_console;
 };
 
-void vt100_stp_vt103_device::stp_w(unsigned pin, int state)
+void vt100_stp_vt103_device::stp_w(u32 pin, int state)
 {
 	using stp = vt100_stp_slot_device;
 	switch (pin)
