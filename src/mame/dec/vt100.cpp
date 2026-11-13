@@ -724,7 +724,7 @@ void vt100_state::vt102(machine_config &config)
  * 23-099E2 (location e21) and 23-100E2 (location e17) - meant for vt132 but only with the OLD vt132 main ROMset of 095,096,097,098E2
  * 23-093E2 (location e21) - meant for vt100 wc through wz 'foreign language' word processing systems
    (TM table 5-9 lists 23-152E2 for wc-wk; the AVO schematic legend lists 23-093E2)
- * 23-184E2 and 23-185E2 - listed with the vt100-wx set below (vt100wp); TM table 5-9 also gives 23-185E2 as vt1xx-ac ROM B
+ * 23-184E2 and 23-185E2 - listed as AVO ROMs with the 23-180E2 set (vt100w BIOS), role unconfirmed; TM table 5-9 also gives 23-185E2 as vt1xx-ac ROM B
  * 23-284E2 or 23-186E2 (e21), 23-185E2 or 23-187E2 (e17) - vt100 with the STP printer option, vt1xx-ac kit (TM table 5-9)
  * 23-224E2, 23-225E2, 23-226E2, 23-227E2 - meant for vt132 but only with the NEW vt132 main ROMset of 180,181,182,183E2
  * 23-236E2, 23-237E2, 23-238E2, 23-239E2 - meant for vt132 but only with the NEW vt132 main ROMset of 180,181,182,183E2, unknown difference to above (PROM vs. mask ROM? same contents?)
@@ -740,35 +740,27 @@ ROM_START( vt100 ) // This is from the schematics at http://www.bitsavers.org/pd
 	ROMX_LOAD( "23-031e2-00.e56", 0x0000, 0x0800, NO_DUMP, ROM_BIOS(0)) // version 1 1978 'earlier ROM', dump needed, correct for earlier vt100s
 	ROM_SYSTEM_BIOS( 1, "vt100", "VT100 newer ROMs" )
 	ROMX_LOAD( "23-061e2-00.e56", 0x0000, 0x0800, CRC(3dae97ff) SHA1(e3437850c33565751b86af6c2fe270a491246d15), ROM_BIOS(1)) // version 2 1979 or 1980 'later ROM', correct for later vt100s
-	ROM_LOAD( "23-032e2-00.e52", 0x0800, 0x0800, CRC(3d86db99) SHA1(cdd8bdecdc643442f6e7d2c83cf002baf8101867))
-	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
-	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
+	ROMX_LOAD( "23-032e2-00.e52", 0x0800, 0x0800, CRC(3d86db99) SHA1(cdd8bdecdc643442f6e7d2c83cf002baf8101867), ROM_BIOS(0))
+	ROMX_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64), ROM_BIOS(0))
+	ROMX_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833), ROM_BIOS(0))
+	ROMX_LOAD( "23-032e2-00.e52", 0x0800, 0x0800, CRC(3d86db99) SHA1(cdd8bdecdc643442f6e7d2c83cf002baf8101867), ROM_BIOS(1))
+	ROMX_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64), ROM_BIOS(1))
+	ROMX_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833), ROM_BIOS(1))
+	// The 23-180E2 set, believed to be the word processing firmware of the
+	// VT100-W models (the foreign language ones take the 23-094E2 alternate
+	// character ROM: see vt100_altchar.cpp), possibly the VT1xx-CE kit; the
+	// newer VT132 set shares these ROMs.  The VT103-04/-05 can use it too.
+	ROM_SYSTEM_BIOS( 2, "vt100w", "VT100-W word processing ROMs?" )
+	ROMX_LOAD( "23-180e2-00.e56", 0x0000, 0x0800, NO_DUMP, ROM_BIOS(2))
+	ROMX_LOAD( "23-181e2-00.e52", 0x0800, 0x0800, NO_DUMP, ROM_BIOS(2))
+	ROMX_LOAD( "23-182e2-00.e45", 0x1000, 0x0800, NO_DUMP, ROM_BIOS(2))
+	ROMX_LOAD( "23-183e2-00.e40", 0x1800, 0x0800, NO_DUMP, ROM_BIOS(2))
 
 	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
 ROM_END
 
 #if 0
-ROM_START( vt100wp ) // This is from the schematics at http://www.bitsavers.org/pdf/dec/terminal/vt100/MP00633_VT100_Mar80.pdf
-// This is the standard vt100 CPU board, with the ?word processing? ROMset, included in the VT1xx-CE kit?
-// the vt103 can also use this ROM set (-04 and -05 revs have it by default, -05 rev also has the optional alt charset ROM by default)
-// NOTE: this is actually the same as the newer VT132 ROMset; vt132 has different AVO ROMs as well.
-	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
-	ROM_LOAD( "23-180e2-00.e56", 0x0000, 0x0800, NO_DUMP)
-	ROM_LOAD( "23-181e2-00.e52", 0x0800, 0x0800, NO_DUMP)
-	ROM_LOAD( "23-182e2-00.e45", 0x1000, 0x0800, NO_DUMP)
-	ROM_LOAD( "23-183e2-00.e40", 0x1800, 0x0800, NO_DUMP)
-
-	ROM_REGION(0x1000, "avo", 0)
-	ROM_LOAD( "23-184e2-00.bin", 0x0000, 0x0800, NO_DUMP)
-	ROM_LOAD( "23-185e2-00.bin", 0x0800, 0x0800, NO_DUMP)
-	ROM_LOAD( "23-186e2-00.bin", 0x1000, 0x0800, NO_DUMP)
-	ROM_LOAD( "23-187e2-00.bin", 0x1800, 0x0800, NO_DUMP)
-
-	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
-	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-ROM_END
-
 ROM_START( vt132 ) // This is from anecdotal evidence and vt100.net, as the vt132 schematics are not scanned
 // but is pretty much confirmed by page 433 in http://bitsavers.trailing-edge.com/www.computer.museum.uq.edu.au/pdf/EK-VT100-TM-003%20VT100%20Series%20Video%20Terminal%20Technical%20Manual.pdf
 // VT100 board with block serial ROMs, AVO with special ROMs, STP, custom firmware with block serial mode
@@ -986,7 +978,6 @@ ROM_END
 
 /*    YEAR  NAME     PARENT  COMPAT  MACHINE  INPUT  CLASS        INIT        COMPANY                          FULLNAME    FLAGS */
 COMP( 1978, vt100,   0,      0,      vt100,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT100",    MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
-//COMP( 1978, vt100wp, vt100,  0,      vt100,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT100-Wx", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
 COMP( 1979, vt100ac, vt100,  0,      vt100ac, vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT100 w/VT1xx-AC STP", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
 COMP( 1981, vt101,   vt102,  0,      vt101,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT101",    MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
 COMP( 1981, vt102,   0,      0,      vt102,   vt100, vt100_state, empty_init, "Digital Equipment Corporation", "VT102",    MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS)
