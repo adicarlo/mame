@@ -527,9 +527,10 @@ void vt100_video_device::video_update(bitmap_ind16 &bitmap, const rectangle &cli
 	}
 }
 
-// The graphics inputs light a dot bright wherever they are asserted (TM-003
-// 8.1: both GRAPHICS 1 IN L and GRAPHICS 2 IN L low; the M7071 drives
-// both from one gate).  The M7071 locks its dot clock to horizontal blank,
+// The graphics inputs light a dot dim, normal or bright as GRAPHICS 1 IN L,
+// GRAPHICS 2 IN L or both are low (TM-003 8.1); they are wire-ANDed with
+// the text video, so a dot shows the brighter of the two.  The M7071
+// drives both from one gate.  The M7071 locks its dot clock to horizontal blank,
 // 662 or 800 dots a line (EK-VT105-TM-001 6.5).  Inferred: its first dot
 // falls one 80-column character cell into the text area in rectangular
 // format (T105 6.4 leaves "one character column" at the left, and 512
@@ -540,26 +541,32 @@ void vt100_video_device::draw_graphics(bitmap_ind16 &bitmap, int y, int line)
 	if (m_graphics_cb.isnull() || y < 0 || y > bitmap.height() - 1)
 		return;
 
-	uint8_t dots[512];
+	uint8_t dots[768];
 	int const format = m_graphics_cb(line, dots);
 	if (format == 0)
 		return;
 
-	double const pixclk = (m_columns == 132) ? clock() : clock() * 2.0 / 3.0;
+	// The VT125 shifts out 768 dots at the 80-column dot clock, whatever
+	// the column mode, starting about 16 dots into the text area (inferred
+	// from TM-003 figure 6-59: its window is centred in the line)
+	double const dotclk = clock() * 2.0 / 3.0;
+	double const pixclk = (m_columns == 132) ? clock() : dotclk;
 	double const line_period = double(m_columns == 132 ? 1530 : 1020) / pixclk;
-	double const dot = line_period / ((format == 2) ? 800 : 662);
-	double const origin = 10.0 / (clock() * 2.0 / 3.0) + ((format == 2) ? 3.6e-6 : 0.0);
+	int const count = (format == 3) ? 768 : 512;
+	double const dot = (format == 3) ? 1.0 / dotclk : line_period / ((format == 2) ? 800 : 662);
+	double const origin = ((format == 3) ? 16.0 : 10.0) / dotclk + ((format == 2) ? 3.6e-6 : 0.0);
 
 	uint16_t *const row = &bitmap.pix(y);
 	int const width = bitmap.width();
-	for (int i = 0; i < 512; i++)
+	for (int i = 0; i < count; i++)
 	{
 		if (!dots[i])
 			continue;
+		uint16_t const level = (format == 3) ? (dots[i] & 3) : 3;
 		int const x0 = int((origin + i * dot) * pixclk);
 		int const x1 = std::max(x0 + 1, int((origin + (i + 1) * dot) * pixclk));
 		for (int x = x0; x < x1 && x < width; x++)
-			row[x] = 3;
+			row[x] = std::max(row[x], level);
 	}
 }
 

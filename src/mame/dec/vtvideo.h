@@ -22,9 +22,11 @@ class vt100_video_device : public device_t,
 {
 public:
 	// GRAPHICS 1/2 IN L from the graphics connector for one scan line,
-	// counted from the end of vertical blank: fills 512 dots (nonzero =
-	// lit) and returns 0 for none, 1 for 512 dots at line/662 (10.4 MHz),
-	// 2 for 512 dots at line/800 (12.4 MHz)
+	// counted from the end of vertical blank: fills the dots and returns 0
+	// for none, 1 for 512 dots at line/662 (10.4 MHz), 2 for 512 dots at
+	// line/800 (12.4 MHz), both lit wherever nonzero; 3 for 768 dots at
+	// the 16 MHz dot clock, each the inputs asserted: 1 GRAPHICS 1 (dim),
+	// 2 GRAPHICS 2 (normal), 3 both (bright)
 	using graphics_delegate = device_delegate<int (int line, uint8_t *dots)>;
 	using altchar_delegate = device_delegate<u8 (offs_t offset)>;
 

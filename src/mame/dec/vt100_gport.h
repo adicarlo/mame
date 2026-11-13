@@ -24,7 +24,8 @@ public:
 	{
 		NONE = 0,
 		RECTANGULAR,    // 512 dots at 10.4 MHz
-		SQUARE          // 512 dots at 12.4 MHz, all on screen (TM-003 figure 6-19)
+		SQUARE,         // 512 dots at 12.4 MHz, all on screen (TM-003 figure 6-19)
+		DOTS_768        // 768 dots at 16 MHz, each 1-3 (GRAPHICS 1, 2, both)
 	};
 
 	template <typename T, typename U>
