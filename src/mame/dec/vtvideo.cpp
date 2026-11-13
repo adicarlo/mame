@@ -130,6 +130,7 @@ void vt100_video_device::device_start()
 	save_item(NAME(m_fill_lines));
 	save_item(NAME(m_is_50hz));
 	save_item(NAME(m_interlaced));
+	save_item(NAME(m_brightness));
 }
 
 //-------------------------------------------------
@@ -139,9 +140,7 @@ void vt100_video_device::device_start()
 void vt100_video_device::device_reset()
 {
 	m_palette->set_pen_color(0, 0x00, 0x00, 0x00); // black
-	m_palette->set_pen_color(1, 0xff - 100, 0xff - 100, 0xff - 100);  // WHITE (dim)
-	m_palette->set_pen_color(2, 0xff - 50, 0xff - 50, 0xff - 50);     // WHITE NORMAL
-	m_palette->set_pen_color(3, 0xff, 0xff, 0xff);              // WHITE (brighter)
+	apply_brightness(); // the latch has no reset (CLR tied high)
 
 	m_height = 25;
 	m_height_MAX = 25;
@@ -370,9 +369,42 @@ void vt100_video_device::dc011_w(uint8_t data)
 	recompute_parameters();
 }
 
+// Brightness D/A latch E49 (74LS174, MP-00633 terminal controller sheet 4):
+// D0-D4 drive open collector 7416 inverters (E14) that ground R49-R53 (620,
+// 300, 150, 75, 36 ohms) in parallel with R54 (75 ohms), the collector load
+// of the Direct Drive Video output stage (Q3/Q4).  A set bit lowers the
+// load and so the video swing to the monitor's cathode driver: larger codes
+// are dimmer, 32 levels (TM-003 4.6.12.1).  D5 is INIT H to the STP (the
+// driver's).  The firmware rewrites the latch every vertical reset.  The
+// monitor's brightness pot sets the CRT grid bias, so black stays black.
+// Not modelled: the monitor's own input impedance across the load (not
+// documented here); pen values stand in for drive voltage (inferred).
 void vt100_video_device::brightness_w(uint8_t data)
 {
-	//m_palette->set_pen_color(1, data, data, data);
+	if ((data & 0x1f) != m_brightness)
+	{
+		m_brightness = data & 0x1f;
+		apply_brightness();
+	}
+}
+
+void vt100_video_device::apply_brightness()
+{
+	static constexpr double R54 = 75.0;
+	static constexpr double R[5] = { 620.0, 300.0, 150.0, 75.0, 36.0 }; // R49-R53, D0-D4
+	double load = 1.0 / R54;
+	for (int i = 0; i < 5; i++)
+		if (BIT(m_brightness, i))
+			load += 1.0 / R[i];
+	double const swing = (1.0 / R54) / load;
+
+	// intensities: dim, normal, bold
+	static constexpr int level[3] = { 0xff - 100, 0xff - 50, 0xff };
+	for (int i = 0; i < 3; i++)
+	{
+		uint8_t const v = uint8_t(level[i] * swing + 0.5);
+		m_palette->set_pen_color(i + 1, v, v, v);
+	}
 }
 
 
