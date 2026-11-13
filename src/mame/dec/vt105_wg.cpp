@@ -94,6 +94,8 @@ private:
 
 	void execute(u8 lo, u8 hi);
 	void busy_until_write();
+	void dis_clr();
+	void first_byte(u8 lo);
 	TIMER_CALLBACK_MEMBER(write_done);
 	TIMER_CALLBACK_MEMBER(clear_done);
 
@@ -179,7 +181,10 @@ void vt105_wg_device::write(u8 data)
 	case 0x20:
 		// data
 		if (m_first)
+		{
 			m_lo = data & 0x1f;
+			first_byte(m_lo);
+		}
 		else
 			execute(m_lo, data & 0x1f);
 		m_first = !m_first;
@@ -188,6 +193,36 @@ void vt105_wg_device::write(u8 data)
 	default:
 		// neither (E64/E74): ignored.  D7 alone pulses COPY L to TB1 for a
 		// hard copy unit, which isn't modelled.
+		break;
+	}
+}
+
+void vt105_wg_device::first_byte(u8 lo)
+{
+	// the enable registers' low halves have latches of their own (E77,
+	// E62) loaded by the first data byte, so a lone byte acts: the TM's
+	// test procedure sends "A#", "I$" and "I0" (T105 appendix A)
+	switch (m_cmd)
+	{
+	case CMD_ENABLE0:
+		m_en0a = lo;
+		break;
+
+	case CMD_ENABLE1:
+		m_en1a = lo;
+		if (BIT(lo, 4))
+		{
+			// INIT: DIS CLR clears the data latches (E83, E60), so every
+			// RAM is written with 0
+			std::fill(std::begin(m_graph[0]), std::end(m_graph[0]), 0);
+			std::fill(std::begin(m_graph[1]), std::end(m_graph[1]), 0);
+			std::fill(std::begin(m_vc), std::end(m_vc), 0);
+			std::fill(std::begin(m_horz), std::end(m_horz), 0);
+			dis_clr();
+		}
+		break;
+
+	default:
 		break;
 	}
 }
@@ -209,22 +244,24 @@ void vt105_wg_device::execute(u8 lo, u8 hi)
 		break;
 
 	case CMD_ENABLE0:
-		m_en0a = lo;
 		m_en0b = hi;
 		break;
 
 	case CMD_ENABLE1:
-		m_en1a = lo;
 		m_en1b = hi;
-		if (BIT(lo, 4) && !m_dis_clr)
+		if (BIT(hi, 1))
 		{
-			// DIS CLR: E85, 1.7 ms
-			m_dis_clr = true;
-			std::fill(std::begin(m_graph[0]), std::end(m_graph[0]), 0);
-			std::fill(std::begin(m_graph[1]), std::end(m_graph[1]), 0);
-			std::fill(std::begin(m_vc), std::end(m_vc), 0);
-			std::fill(std::begin(m_horz), std::end(m_horz), 0);
-			m_clear_timer->adjust(attotime::from_usec(1700));
+			// T: the 2.4 ms TEST one-shot (E66) also fires DIS CLR.  While
+			// both run, the RAM data mux takes the Y counter, which TEST
+			// reloads with the preload + 16 every line and counts down
+			// every second dot, so each graph RAM gets a falling diagonal;
+			// TEST also forces the line and marker data to 1 (E68, E50)
+			u8 const top = (BIT(hi, 0) ? 0xef : 0xe5) + 0x10;
+			for (int x = 0; x < 512; x++)
+				m_graph[0][x] = m_graph[1][x] = u8(top - (x >> 1));
+			std::fill(std::begin(m_vc), std::end(m_vc), VC_VERT | VC_CUR0 | VC_CUR1);
+			std::fill(std::begin(m_horz), std::end(m_horz), 1);
+			dis_clr();
 		}
 		break;
 
@@ -266,6 +303,13 @@ void vt105_wg_device::execute(u8 lo, u8 hi)
 
 // The pair is latched now and written at the end of the dot sweep of the
 // first line outside blanking at least 12 us later (sheet 6, E53).
+void vt105_wg_device::dis_clr()
+{
+	// E85, 1.7 ms, retriggerable; GRAPHICS FLAG stays busy throughout
+	m_dis_clr = true;
+	m_clear_timer->adjust(attotime::from_usec(1700));
+}
+
 void vt105_wg_device::busy_until_write()
 {
 	m_prewrite = true;
@@ -344,13 +388,13 @@ vt100_gport_slot_device::format_t vt105_wg_device::scan(int line, u8 *dots)
 			if (cur && ((v >> 4) == (y >> 4)))
 				lit = true;
 
-			// shading lights every other dot, the two graphs on opposite
-			// dot times (TIME(0)/TIME(1), E80/E81); which graph has which
-			// phase isn't stated.  With its baseline enabled a graph is
-			// shaded between the graph and the baseline, the baseline
-			// included (T105 figure 6-14); otherwise the histogram bit
-			// shades it down to the bottom.
-			if (BIT(i, 0) == g)
+			// shading is gated by TIME(1) or TIME(0) (E80/E81): half of
+			// every dot, the two graphs on opposite halves, so a shaded
+			// area is lit along the whole scan line (T105 figures A-2 and
+			// A-3 draw it as horizontal lines).  With its baseline enabled
+			// a graph is shaded between the graph and the baseline, the
+			// baseline included (T105 figure 6-14); otherwise the
+			// histogram bit shades it down to the bottom.
 			{
 				u8 const b = m_base[g];
 				if (BIT(m_en0b, 1 + g))
