@@ -7,7 +7,8 @@
     The VT125's graphics processor: an 8085 with 24K of mask ROM and 16K of
     DRAM, a vector generator drawing into a 768 x 256 x 2-plane bit map
     (240 lines shown), and an output map driving the VT100's GRAPHICS 1/2
-    IN and three analog outputs for a colour monitor.  All its serial ports
+    IN and three analog outputs for a colour monitor (a screen of its own
+    here, "color").  All its serial ports
     are 8251As on the paddle board in the STP connector, reached over a
     24-pin cable (vt125_cable.h): the host line, the printer port, and the
     link to the VT100's own 8251.  It runs entirely from the VT100's
@@ -23,7 +24,6 @@
     (see vector_go()), checked against the datapath on the prints.
 
     TODO:
-    - the colour outputs (output map BD0-BD5) aren't connected
     - ERASE runs at once rather than behind the display refresh
     - the five PROMs only this board has (23-067B1, 068B1, 069B1, 070B1,
       582A2) are undumped
@@ -37,6 +37,8 @@
 #include "vt125_cable.h"
 
 #include "cpu/i8085/i8085.h"
+
+#include "screen.h"
 
 #define LOG_VG (1U << 1)
 
@@ -77,6 +79,7 @@ protected:
 private:
 	required_device<i8085a_cpu_device> m_cpu;
 	required_region_ptr<u8> m_dir;
+	required_device<screen_device> m_color;
 
 	vt125_paddle_cable_interface *m_paddle;
 	memory_passthrough_handler m_wait_taps[3];
@@ -109,6 +112,8 @@ private:
 	void io_map(address_map &map) ATTR_COLD;
 
 	void vblank(screen_device &screen, bool state);
+	void scan_row(int line, u8 *pixels) const;
+	u32 color_update(screen_device &screen, bitmap_rgb32 &bitmap, rectangle const &cliprect);
 
 	u8 status_r();
 	u8 in_com_r(offs_t offset);
@@ -138,6 +143,7 @@ vt125_mono_device::vt125_mono_device(const machine_config &mconfig, const char *
 	, device_vt100_gport_interface(mconfig, *this)
 	, m_cpu(*this, "cpu")
 	, m_dir(*this, "dir")
+	, m_color(*this, "color")
 	, m_paddle(nullptr)
 	, m_init(0)
 	, m_graphics_flag(1)
@@ -225,6 +231,14 @@ void vt125_mono_device::device_add_mconfig(machine_config &config)
 	I8085A(config, m_cpu, 24.0734_MHz_XTAL / 4);
 	m_cpu->set_addrmap(AS_PROGRAM, &vt125_mono_device::mem_map);
 	m_cpu->set_addrmap(AS_IO, &vt125_mono_device::io_map);
+
+	// The R, G and B BNCs on the board's bracket.  The colour monitor takes
+	// its sync from the VT100 (TM-003 fig 6-76), so the same raster as the
+	// VT100's screen; only the 768 x 240 window is shown, as the output
+	// latches are cleared (black) outside it.
+	SCREEN(config, m_color);
+	m_color->set_raw(24.0734_MHz_XTAL * 2 / 3, 102 * 10, 0, BITMAP_W, 262, 0, 240);
+	m_color->set_screen_update(FUNC(vt125_mono_device::color_update));
 }
 
 void vt125_mono_device::device_start()
@@ -504,26 +518,57 @@ void vt125_mono_device::offset_w(offs_t offset, u8 data)
 // Video out (MB1, MB3, MB9-MB12; TM-003 6.7.8).  One bit map row per scan
 // line, 240 of the 256 from V OFFSET down, wrapping (TM-003 6-82).  Each
 // row is 768 dots at 16 MHz from three cascaded 74LS195s per plane.  A
-// pixel's two plane bits address the output map, whose BD6 and BD7 drive
-// GRAPHICS 1 IN L (dim) and GRAPHICS 2 IN L (normal) through inverters;
-// BD0-BD5 are the blue, red and green outputs to a colour monitor.
+// pixel's two plane bits address the output map: BD0-BD5 drive the blue,
+// red and green outputs, BD6 and BD7 GRAPHICS 1 IN L (dim) and GRAPHICS 2
+// IN L (normal) through inverters.
 //
 // Inferred: H OFFSET counts 12-dot words and MINOR OFFSET single dots, and
 // the firmware's resting values (32 and 04, rewritten every frame) start
 // the line at pixel 0; plane A is the low bit of the map address.
+void vt125_mono_device::scan_row(int line, u8 *pixels) const
+{
+	u8 const *const src = &m_bitmap[((line + m_offset[2]) & 0xff) * BITMAP_W];
+	unsigned const start = ((((m_offset[1] - 0x32) & 0x3f) * 12) + m_offset[0] - 4 + BITMAP_W) % BITMAP_W;
+	for (unsigned i = 0; i < BITMAP_W; i++)
+		pixels[i] = src[(start + i) % BITMAP_W];
+}
+
 vt100_gport_slot_device::format_t vt125_mono_device::scan(int line, u8 *dots)
 {
 	if (line < 0 || line >= 240)
 		return vt100_gport_slot_device::NONE;
 
-	u8 const *const src = &m_bitmap[((line + m_offset[2]) & 0xff) * BITMAP_W];
-	unsigned const start = ((((m_offset[1] - 0x32) & 0x3f) * 12) + m_offset[0] - 4 + BITMAP_W) % BITMAP_W;
 	u8 levels[4];
 	for (unsigned i = 0; i < 4; i++)
 		levels[i] = BIT(m_output_map[i], 6) | (BIT(m_output_map[i], 7) << 1);
+	scan_row(line, dots);
 	for (unsigned i = 0; i < BITMAP_W; i++)
-		dots[i] = levels[src[(start + i) % BITMAP_W]];
+		dots[i] = levels[dots[i]];
 	return vt100_gport_slot_device::DOTS_768;
+}
+
+// Each gun is a 2-bit D/A: the entry's bits through 720 and 360 ohm (LSB,
+// MSB) into the base of a 2N2904 current source driving 75 ohms (MB1).
+// TM-003 table 6-7 gives levels 0-3 as 0, 0.5, 1.3 and 2.0 V unterminated.
+u32 vt125_mono_device::color_update(screen_device &screen, bitmap_rgb32 &bitmap, rectangle const &cliprect)
+{
+	static constexpr u8 GUN[4] = { 0, 64, 166, 255 };
+	rgb_t pens[4];
+	for (unsigned i = 0; i < 4; i++)
+	{
+		u8 const m = m_output_map[i];
+		pens[i] = rgb_t(GUN[BIT(m, 2, 2)], GUN[BIT(m, 4, 2)], GUN[BIT(m, 0, 2)]);
+	}
+
+	u8 pixels[BITMAP_W];
+	for (int y = cliprect.min_y; y <= cliprect.max_y; y++)
+	{
+		scan_row(y, pixels);
+		u32 *const dst = &bitmap.pix(y);
+		for (int x = cliprect.min_x; x <= cliprect.max_x; x++)
+			dst[x] = pens[pixels[x]];
+	}
+	return 0;
 }
 
 // the output map: four 8-bit entries, two 74LS670s (MB1)
