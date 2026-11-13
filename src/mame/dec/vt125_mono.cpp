@@ -26,7 +26,6 @@
     TODO:
     - the five PROMs only this board has (23-067B1, 068B1, 069B1, 070B1,
       582A2) are undumped
-    - interrupt acknowledge cycles take no wait state here
 
 ***************************************************************************/
 
@@ -251,8 +250,10 @@ void vt125_mono_device::device_start()
 	// clock later unless E92 decodes a memory cycle at 8000-BFFF.  So the
 	// program DRAM runs at full speed and every other bus cycle -- the mask
 	// ROMs, C000-FFFF and all I/O -- takes one wait state (inferred from
-	// the circuit; the 8085A data sheet's READY timing wasn't to hand).
-	// Taps see opcode fetches too, so they cover every ROM cycle.
+	// the circuit).  Taps see opcode fetches too, so they cover every ROM
+	// cycle.  INTR is grounded, so there are no INTA cycles, and the bus
+	// idle M1 of a TRAP or RST n.5 ignores READY (MCS-80/85 Family User's
+	// Manual 2.3.5): accepting an interrupt takes no wait state.
 	m_reset_timer = timer_alloc(FUNC(vt125_mono_device::reset_release), this);
 	m_done_timer = timer_alloc(FUNC(vt125_mono_device::vector_done), this);
 	m_erase_timer = timer_alloc(FUNC(vt125_mono_device::erase_line), this);
