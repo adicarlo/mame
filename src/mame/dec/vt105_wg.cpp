@@ -29,9 +29,9 @@
     of DIS CLR (sheet 1, E85).
 
     TODO:
-    - the interactive test (register 1 T bit)
-    - ODD EVEN(1) H, which gates the write (sheet 6, E46): every line is
-      assumed
+    - ODD EVEN(1) H, which gates the write (sheet 6, E46): where in the
+      line the write happens isn't settled; it doesn't change what the
+      firmware sees at serial rates
     - the second unit (P..\ commands)
 
 ***************************************************************************/
@@ -82,17 +82,23 @@ private:
 		CMD_NONE = 0xff
 	};
 
-	// enable register 0, first byte (E77) and second byte (E70)
-	static constexpr u8 EN0_DISPLAY = 0x01, EN0_GRAPH0 = 0x02, EN0_GRAPH1 = 0x04, EN0_HIST0 = 0x08, EN0_HIST1 = 0x10;
-	static constexpr u8 EN0_BASECTRL = 0x01, EN0_BASE0 = 0x02, EN0_BASE1 = 0x04, EN0_STRIP = 0x08, EN0_DUAL = 0x10;
-	// enable register 1, first byte (E62, initialize) and second byte
-	static constexpr u8 EN1_HORZ = 0x01, EN1_VERT = 0x02, EN1_CUR0 = 0x04, EN1_CUR1 = 0x08, EN1_INIT = 0x10;
-	static constexpr u8 EN1_SQUARE = 0x01, EN1_TEST = 0x02;
+	// Enable register 0 (programmer's card): first byte (E77) bit 0
+	// display, bits 1-2 graph 0/1, bits 3-4 histogram 0/1; second byte
+	// (E70) bit 0 which baseline @ loads, bits 1-2 shade graph 0/1 from
+	// its baseline, bit 3 strip chart, bit 4 dual strip chart.
+	// Enable register 1: first byte (E62) bit 0 horizontal lines, bit 1
+	// vertical lines, bits 2-3 graph 0/1 markers, bit 4 initialize;
+	// second byte bit 0 square format, bit 1 interactive test.
+	// Per-graph bits are picked with BIT(reg, n + graph).
+	static constexpr u8 EN0_DISPLAY = 0x01, EN0_STRIP = 0x08, EN0_DUAL = 0x10;
+	static constexpr u8 EN1_HORZ = 0x01, EN1_VERT = 0x02;
 
 	// write side: the vertical/cursor RAM bits
 	static constexpr u8 VC_VERT = 0x01, VC_CUR0 = 0x02, VC_CUR1 = 0x04;
 
 	void execute(u8 lo, u8 hi);
+	void advance();
+	void clear_rams();
 	void busy_until_write();
 	void dis_clr();
 	void first_byte(u8 lo);
@@ -122,10 +128,7 @@ void vt105_wg_device::device_start()
 	m_write_timer = timer_alloc(FUNC(vt105_wg_device::write_done), this);
 	m_clear_timer = timer_alloc(FUNC(vt105_wg_device::clear_done), this);
 
-	std::fill(std::begin(m_graph[0]), std::end(m_graph[0]), 0);
-	std::fill(std::begin(m_graph[1]), std::end(m_graph[1]), 0);
-	std::fill(std::begin(m_vc), std::end(m_vc), 0);
-	std::fill(std::begin(m_horz), std::end(m_horz), 0);
+	clear_rams();
 	m_base[0] = m_base[1] = 0;
 	m_add = 0;
 
@@ -169,10 +172,15 @@ void vt105_wg_device::write(u8 data)
 	case 0x40:
 		// control: decoder inputs DB3, DB0, DB1, DB2 (sheet 1, E65 to E72)
 		if (BIT(data, 4))
-			m_cmd = CMD_NONE;   // unit 1
+		{
+			logerror("%s: command %02X for unit 1 ignored (no second board)\n", machine().describe_context(), data);
+			m_cmd = CMD_NONE;
+		}
 		else
 		{
 			u8 const sel = bitswap<4>(data, 2, 1, 0, 3);
+			if (sel >= 10)
+				logerror("%s: command %02X has no decoder output, ignored\n", machine().describe_context(), data);
 			m_cmd = (sel < 10) ? sel : CMD_NONE;
 		}
 		m_first = true;
@@ -191,8 +199,11 @@ void vt105_wg_device::write(u8 data)
 		break;
 
 	default:
-		// neither (E64/E74): ignored.  D7 alone pulses COPY L to TB1 for a
-		// hard copy unit, which isn't modelled.
+		// neither (E64/E74).  D7 pulses COPY L to TB1 for a hard copy unit.
+		if (BIT(data, 7))
+			logerror("%s: COPY strobe %02X ignored (no hard copy unit)\n", machine().describe_context(), data);
+		else
+			logerror("%s: byte %02X is neither control nor data, ignored\n", machine().describe_context(), data);
 		break;
 	}
 }
@@ -214,10 +225,7 @@ void vt105_wg_device::first_byte(u8 lo)
 		{
 			// INIT: DIS CLR clears the data latches (E83, E60), so every
 			// RAM is written with 0
-			std::fill(std::begin(m_graph[0]), std::end(m_graph[0]), 0);
-			std::fill(std::begin(m_graph[1]), std::end(m_graph[1]), 0);
-			std::fill(std::begin(m_vc), std::end(m_vc), 0);
-			std::fill(std::begin(m_horz), std::end(m_horz), 0);
+			clear_rams();
 			dis_clr();
 		}
 		break;
@@ -257,8 +265,8 @@ void vt105_wg_device::execute(u8 lo, u8 hi)
 			// every second dot, so each graph RAM gets a falling diagonal;
 			// TEST also forces the line and marker data to 1 (E68, E50)
 			u8 const top = (BIT(hi, 0) ? 0xef : 0xe5) + 0x10;
-			for (int x = 0; x < 512; x++)
-				m_graph[0][x] = m_graph[1][x] = u8(top - (x >> 1));
+			for (int i = 0; i < 512; i++)
+				m_graph[0][i] = m_graph[1][i] = u8(top - (i >> 1));
 			std::fill(std::begin(m_vc), std::end(m_vc), VC_VERT | VC_CUR0 | VC_CUR1);
 			std::fill(std::begin(m_horz), std::end(m_horz), 1);
 			dis_clr();
@@ -272,9 +280,7 @@ void vt105_wg_device::execute(u8 lo, u8 hi)
 		if ((m_cmd == CMD_GRAPH1) && (m_en0b & EN0_DUAL))
 			m_add = (m_add - 1) & 0x1ff;
 		m_graph[m_cmd - CMD_GRAPH0][m_add] = y;
-		m_add = (m_add + 1) & 0x1ff;
-		if (!m_add && (m_en0b & (EN0_STRIP | EN0_DUAL)))
-			m_strip_ff = true;  // OVERFLOW: the picture starts moving
+		advance();
 		break;
 
 	case CMD_CUR0:
@@ -282,11 +288,12 @@ void vt105_wg_device::execute(u8 lo, u8 hi)
 	case CMD_VERT:
 	{
 		// these carry their own X, which also loads the pointer (LD XDATA,
-		// T105 figure 6-12); they don't advance it (figure 6-18, though
-		// 6.7 lists WRITE DATA among the count sources)
+		// T105 figure 6-12), and WRITE DATA L advances it like a graph
+		// write (TM-003 6.4.1.8, T105 6.7; figure 6-18 shows no count)
 		u8 const bit = (m_cmd == CMD_VERT) ? VC_VERT : (m_cmd == CMD_CUR0) ? VC_CUR0 : VC_CUR1;
 		m_add = x;
 		m_vc[x] = w ? (m_vc[x] | bit) : (m_vc[x] & ~bit);
+		advance();
 		break;
 	}
 
@@ -301,8 +308,23 @@ void vt105_wg_device::execute(u8 lo, u8 hi)
 	busy_until_write();
 }
 
-// The pair is latched now and written at the end of the dot sweep of the
-// first line outside blanking at least 12 us later (sheet 6, E53).
+// the write pointer after a RAM write; its overflow sets the strip chart
+// flip-flop, after which the picture starts moving
+void vt105_wg_device::advance()
+{
+	m_add = (m_add + 1) & 0x1ff;
+	if (!m_add && (m_en0b & (EN0_STRIP | EN0_DUAL)))
+		m_strip_ff = true;
+}
+
+void vt105_wg_device::clear_rams()
+{
+	std::fill(std::begin(m_graph[0]), std::end(m_graph[0]), 0);
+	std::fill(std::begin(m_graph[1]), std::end(m_graph[1]), 0);
+	std::fill(std::begin(m_vc), std::end(m_vc), 0);
+	std::fill(std::begin(m_horz), std::end(m_horz), 0);
+}
+
 void vt105_wg_device::dis_clr()
 {
 	// E85, 1.7 ms, retriggerable; GRAPHICS FLAG stays busy throughout
@@ -310,6 +332,8 @@ void vt105_wg_device::dis_clr()
 	m_clear_timer->adjust(attotime::from_usec(1700));
 }
 
+// The pair is latched now and written at the end of the dot sweep of the
+// first line outside blanking at least 12 us later (sheet 6, E53).
 void vt105_wg_device::busy_until_write()
 {
 	m_prewrite = true;
