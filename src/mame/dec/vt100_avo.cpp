@@ -17,20 +17,29 @@
     jumpers; the schematic doesn't.  Its RAM is selected from the terminal
     controller's decode, so it repeats with the base RAM outside 8000-BFFF.
 
-    Jumpers W5-W7 (switch S1 on later boards) place the 8K ROM at 0000
-    (overlay), 8000 or A000; the 2K sockets answer in the 8000/A000 block it
-    doesn't claim (E16, E23, E24).  Only W6 is modelled, as the VT1XX-AC
-    and VT132 sets use it: 8K socket at A000, 2K ROMs at 8000-9FFF.  No 8K
-    ROM is dumped, so A000-BFFF is always an empty socket.  Patch jumpers
-    W1-W4/W8-W14, which put 2K ROMs over the base firmware, and the other
-    8K placements aren't modelled: no ROMs that use them are dumped.
+    Switch pack S1 (E19 on the schematic; jumpers W1-W8 on early boards,
+    Wn = S1-(9-n)) sets the ROM decode; closed enables:
+    - S1-8..S1-5 (W1-W4): 2K socket A, B, C or D also answers at 0000,
+      0800, 1000 or 1800, in place of the base firmware (patch ROMs; E24's
+      2Y outputs, through E16 to MEM DISABLE)
+    - S1-4, S1-3, S1-2 (W5-W7): the 8K socket (E8) at 0000 (overlay), A000
+      or 8000 (E12 Y0, Y5, Y4 onto 8K ROM EN L)
+    - S1-1 (W8): E8 is a 2K ROM, socket D at 9800; open, E8 is the 8K
+      socket
+    The 2K sockets answer in the 8000/A000 block the 8K socket doesn't
+    claim: A000 with S1-2, else 8000 (inferred from W6/W7 in TM-003 6.2.3).
+    No 8K ROM is dumped, so the 8K socket always reads empty.  Pack S2 (E20,
+    W9-W16) rewires E8's pins for a 2K or 8K part and isn't modelled.  The
+    TM's settings (table 5-10): none for a VT100, S1-3 for the VT1XX-AC and
+    VT100-WC..WK, S1-8 and S1-2 for the VT100-WA/WB.  The decode is read at
+    reset.
 
     Sources: VT100 technical manual EK-VT100-TM-003, 4.2.5 and 6.2.3,
-    tables 5-8 to 5-10; MP-00633 print set, AVO schematic D-CS-5413097.
+    tables 5-8 to 5-10, figure 5-34; MP-00633 print set, AVO schematic
+    D-CS-5413097-0-1 rev F (switch legend).
 
     TODO:
-    - patch jumpers and the W5/W7 8K ROM placements, once ROMs for them
-      are dumped
+    - pack S2, and ROMs for the patch and 8K placements
 
 ***************************************************************************/
 
@@ -95,16 +104,27 @@ protected:
 		: device_t(mconfig, type, tag, owner, clock)
 		, device_vt100_avo_interface(mconfig, *this)
 		, m_rom(*this, "rom")
+		, m_s1(*this, "S1")
+		, m_patch{ { *this, "patch0" }, { *this, "patch1" }, { *this, "patch2" }, { *this, "patch3" } }
+		, m_overlay(*this, "overlay")
 	{
 	}
 
 	virtual void device_start() override ATTR_COLD;
+	virtual void device_reset() override ATTR_COLD;
+	virtual ioport_constructor device_input_ports() const override ATTR_COLD;
 
 private:
 	u8 attr_r(offs_t offset) { return m_attr[offset] | 0xf0; }   // 4 bits wide
 	void attr_w(offs_t offset, u8 data) { m_attr[offset] = data & 0x0f; }
 
+	u8 socket_r(offs_t offset);
+
 	optional_region_ptr<u8> m_rom;      // 2K sockets A-D (E21, E17, E13, E8)
+	required_ioport m_s1;
+	memory_view m_patch[4];             // 0000-1FFF in 2K blocks
+	memory_view m_overlay;              // the 8K socket at 0000
+	u8 m_decode;                        // S1, as read at reset
 
 	u8 m_screen[0x400];
 	u8 m_attr[0x1000];
@@ -120,7 +140,54 @@ public:
 
 protected:
 	virtual const tiny_rom_entry *device_rom_region() const override ATTR_COLD;
+	virtual ioport_constructor device_input_ports() const override ATTR_COLD;
 };
+
+
+#define AVO_S1(dflt) \
+	PORT_START("S1") \
+	PORT_DIPNAME(0x01, (dflt) & 0x01, "E8 as 2K ROM D at 9800") PORT_DIPLOCATION("S1:1") \
+	PORT_DIPSETTING(   0x00, DEF_STR(Off)) \
+	PORT_DIPSETTING(   0x01, DEF_STR(On)) \
+	PORT_DIPNAME(0x02, (dflt) & 0x02, "8K ROM at 8000") PORT_DIPLOCATION("S1:2") \
+	PORT_DIPSETTING(   0x00, DEF_STR(Off)) \
+	PORT_DIPSETTING(   0x02, DEF_STR(On)) \
+	PORT_DIPNAME(0x04, (dflt) & 0x04, "8K ROM at A000") PORT_DIPLOCATION("S1:3") \
+	PORT_DIPSETTING(   0x00, DEF_STR(Off)) \
+	PORT_DIPSETTING(   0x04, DEF_STR(On)) \
+	PORT_DIPNAME(0x08, (dflt) & 0x08, "8K ROM over 0000") PORT_DIPLOCATION("S1:4") \
+	PORT_DIPSETTING(   0x00, DEF_STR(Off)) \
+	PORT_DIPSETTING(   0x08, DEF_STR(On)) \
+	PORT_DIPNAME(0x10, (dflt) & 0x10, "ROM D over 1800") PORT_DIPLOCATION("S1:5") \
+	PORT_DIPSETTING(   0x00, DEF_STR(Off)) \
+	PORT_DIPSETTING(   0x10, DEF_STR(On)) \
+	PORT_DIPNAME(0x20, (dflt) & 0x20, "ROM C over 1000") PORT_DIPLOCATION("S1:6") \
+	PORT_DIPSETTING(   0x00, DEF_STR(Off)) \
+	PORT_DIPSETTING(   0x20, DEF_STR(On)) \
+	PORT_DIPNAME(0x40, (dflt) & 0x40, "ROM B over 0800") PORT_DIPLOCATION("S1:7") \
+	PORT_DIPSETTING(   0x00, DEF_STR(Off)) \
+	PORT_DIPSETTING(   0x40, DEF_STR(On)) \
+	PORT_DIPNAME(0x80, (dflt) & 0x80, "ROM A over 0000") PORT_DIPLOCATION("S1:8") \
+	PORT_DIPSETTING(   0x00, DEF_STR(Off)) \
+	PORT_DIPSETTING(   0x80, DEF_STR(On))
+
+INPUT_PORTS_START( vt100_avo )
+	AVO_S1(0x00)
+INPUT_PORTS_END
+
+INPUT_PORTS_START( vt100_avo_ac )
+	AVO_S1(0x04)
+INPUT_PORTS_END
+
+ioport_constructor vt100_avo_device::device_input_ports() const
+{
+	return INPUT_PORTS_NAME(vt100_avo);
+}
+
+ioport_constructor vt100_avo_ac_device::device_input_ports() const
+{
+	return INPUT_PORTS_NAME(vt100_avo_ac);
+}
 
 
 ROM_START( vt100_avo_ac )
@@ -143,9 +210,11 @@ void vt100_avo_device::device_start()
 {
 	std::fill_n(m_screen, std::size(m_screen), 0);
 	std::fill_n(m_attr, std::size(m_attr), 0x0f);
+	m_decode = 0;
 
 	save_item(NAME(m_screen));
 	save_item(NAME(m_attr));
+	save_item(NAME(m_decode));
 
 	address_space &mem = space();
 
@@ -156,10 +225,55 @@ void vt100_avo_device::device_start()
 			read8sm_delegate(*this, FUNC(vt100_avo_device::attr_r)),
 			write8sm_delegate(*this, FUNC(vt100_avo_device::attr_w)));
 
-	// MEM DISABLE: 8000-BFFF is the AVO's, empty sockets read open bus
-	mem.unmap_readwrite(0x8000, 0xbfff);
-	if (m_rom.found())
-		mem.install_rom(0x8000, 0x9fff, &m_rom[0]);
+	// MEM DISABLE: 8000-BFFF is always the AVO's; the patch blocks are
+	// views over the base firmware
+	mem.install_read_handler(0x8000, 0xbfff, read8sm_delegate(*this, FUNC(vt100_avo_device::socket_r)));
+	mem.unmap_write(0x8000, 0xbfff);
+	for (int i = 0; i < 4; i++)
+	{
+		offs_t const base = i * 0x800;
+		mem.install_view(base, base + 0x7ff, m_patch[i]);
+		if (m_rom.found())
+			m_patch[i][0].install_rom(base, base + 0x7ff, &m_rom[base]);
+		else
+			m_patch[i][0].unmap_read(base, base + 0x7ff);
+	}
+	mem.install_view(0x0000, 0x1fff, m_overlay);
+	m_overlay[0].unmap_read(0x0000, 0x1fff); // no 8K ROM dumped
+}
+
+void vt100_avo_device::device_reset()
+{
+	u8 const s1 = m_decode = m_s1->read();
+	for (int i = 0; i < 4; i++)
+	{
+		if (BIT(s1, 7 - i))
+			m_patch[i].select(0);
+		else
+			m_patch[i].disable();
+	}
+	if (BIT(s1, 3))
+		m_overlay.select(0);
+	else
+		m_overlay.disable();
+}
+
+// 8000-BFFF: the 8K socket where S1-2/S1-3 put it, the 2K sockets in the
+// other block; socket D only with S1-1, as E8 is otherwise the 8K socket.
+// Unselected and empty sockets read open bus.
+u8 vt100_avo_device::socket_r(offs_t offset)
+{
+	u8 const s1 = m_decode;
+	bool const high = BIT(offset, 13); // A000-BFFF
+	bool const rom8k = high ? BIT(s1, 2) : BIT(s1, 1);
+	if (rom8k || !m_rom.found())
+		return 0xff;    // no 8K ROM dumped
+	if (high != BIT(s1, 1))
+		return 0xff;    // the 2K sockets are in the other block
+	offs_t const rom = offset & 0x1fff;
+	if (rom >= 0x1800 && !BIT(s1, 0))
+		return 0xff;
+	return m_rom[rom];
 }
 
 u8 vt100_avo_device::video_r(offs_t offset)
