@@ -26,7 +26,6 @@
     TODO:
     - the five PROMs only this board has (23-067B1, 068B1, 069B1, 070B1,
       582A2) are undumped
-    - status bit D6 (CLK OUT H) reads 0
     - interrupt acknowledge cycles take no wait state here
 
 ***************************************************************************/
@@ -87,7 +86,7 @@ private:
 
 	u8 m_init;              // INIT H from the VT100
 	u8 m_graphics_flag;     // GRAPHICS FLAG L to the VT100, from the paddle
-	u8 m_clk_shift;         // CLK SHIFT from the paddle
+	u8 m_clk_shift;         // CLK SHIFT from the paddle; see status_r()
 
 	static constexpr unsigned BITMAP_W = 768;
 	static constexpr unsigned BITMAP_H = 256;
@@ -104,7 +103,7 @@ private:
 	u8 m_mem_data;          // MEM DATA B/A (E116/E117 via E118): the last pixel read
 	emu_timer *m_done_timer;
 	std::unique_ptr<u8[]> m_bitmap; // 2 bits per pixel: plane A in bit 0, plane B in bit 1
-	u8 m_offset[6];         // ports 10-15 (E51)
+	u8 m_offset[5];         // ports 10-14 (E51)
 	u8 m_output_map[4];     // E46/E58, ports 18-1B
 
 	void mem_map(address_map &map) ATTR_COLD;
@@ -348,6 +347,13 @@ void vt125_mono_device::trans_ready_w(int state)
 // E116/E117): the pixel the vector generator last read, before its write.
 u8 vt125_mono_device::status_r()
 {
+	// D6 CLK OUT H is the clock shift glitch flag, E52 (MB3): set when SYNC
+	// UP L falls with the 8 MHz divider E54 in the wrong phase against the
+	// 16 MHz bit map clock, cleared by port 15.  The firmware (4220, every
+	// frame) answers it by toggling DTR of E3, CLK SHIFT, which E49/E119
+	// latch each line to invert the whole 16 MHz domain (MB1), a half-clock
+	// shift against the VT100's 24 MHz.  The 16 MHz here has no phase to
+	// get wrong, so the flag stays clear and CLK SHIFT has nothing to move.
 	return (m_init ? 0x01 : 0x00)
 			| (m_mem_data << 1)
 			| (screen().vblank() ? 0x08 : 0x00)
@@ -548,6 +554,8 @@ void vt125_mono_device::offset_w(offs_t offset, u8 data)
 		break;
 	case 4: // LD PMU: E88 latches D3-D0
 		m_pmul = data & 0x0f;
+		break;
+	case 5: // CLR CLK SHIFT L: clears E52, which never sets here (status_r)
 		break;
 	}
 }
