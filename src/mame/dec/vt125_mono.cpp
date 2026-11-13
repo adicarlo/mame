@@ -23,7 +23,8 @@
     (see vector_go()), checked against the datapath on the prints.
 
     TODO:
-    - video out from the bit map, and the output map
+    - the colour outputs (output map BD0-BD5) aren't connected
+    - ERASE runs at once rather than behind the display refresh
     - the five PROMs only this board has (23-067B1, 068B1, 069B1, 070B1,
       582A2) are undumped
     - status bit D6 (CLK OUT H) reads 0
@@ -57,7 +58,7 @@ public:
 	// device_vt100_gport_interface
 	virtual void write(u8 data) override { }
 	virtual int flag_r() override { return m_graphics_flag; }
-	virtual vt100_gport_slot_device::format_t scan(int line, u8 *dots) override { return vt100_gport_slot_device::NONE; }
+	virtual vt100_gport_slot_device::format_t scan(int line, u8 *dots) override;
 	virtual void init_w(int state) override;
 
 	// vt125_mono_cable_interface
@@ -498,6 +499,31 @@ void vt125_mono_device::offset_w(offs_t offset, u8 data)
 		m_pmul = data & 0x0f;
 		break;
 	}
+}
+
+// Video out (MB1, MB3, MB9-MB12; TM-003 6.7.8).  One bit map row per scan
+// line, 240 of the 256 from V OFFSET down, wrapping (TM-003 6-82).  Each
+// row is 768 dots at 16 MHz from three cascaded 74LS195s per plane.  A
+// pixel's two plane bits address the output map, whose BD6 and BD7 drive
+// GRAPHICS 1 IN L (dim) and GRAPHICS 2 IN L (normal) through inverters;
+// BD0-BD5 are the blue, red and green outputs to a colour monitor.
+//
+// Inferred: H OFFSET counts 12-dot words and MINOR OFFSET single dots, and
+// the firmware's resting values (32 and 04, rewritten every frame) start
+// the line at pixel 0; plane A is the low bit of the map address.
+vt100_gport_slot_device::format_t vt125_mono_device::scan(int line, u8 *dots)
+{
+	if (line < 0 || line >= 240)
+		return vt100_gport_slot_device::NONE;
+
+	u8 const *const src = &m_bitmap[((line + m_offset[2]) & 0xff) * BITMAP_W];
+	unsigned const start = ((((m_offset[1] - 0x32) & 0x3f) * 12) + m_offset[0] - 4 + BITMAP_W) % BITMAP_W;
+	u8 levels[4];
+	for (unsigned i = 0; i < 4; i++)
+		levels[i] = BIT(m_output_map[i], 6) | (BIT(m_output_map[i], 7) << 1);
+	for (unsigned i = 0; i < BITMAP_W; i++)
+		dots[i] = levels[src[(start + i) % BITMAP_W]];
+	return vt100_gport_slot_device::DOTS_768;
 }
 
 // the output map: four 8-bit entries, two 74LS670s (MB1)
