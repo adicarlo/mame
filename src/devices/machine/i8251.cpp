@@ -543,6 +543,14 @@ void i8251_device::device_reset()
 
 void i8251_device::command_w(uint8_t data)
 {
+	// An internal reset (IR) puts the device into the "Idle" state, as the
+	// RESET pin does, until new control words are written (8251A data
+	// sheet, RESET): the other bits of the same command don't take effect.
+	// Firmware that writes 4E three times to reset from any state relies on
+	// this, or 4E's SBRK would hold TxD at break.
+	if (BIT(data, 6))
+		data = 0x40;
+
 	/* command */
 	m_command = data;
 
