@@ -120,7 +120,8 @@ public:
 		, device_vt100_stp_interface(mconfig, *this)
 		, m_cpu(*this, "cpu")
 		, m_rom(*this, "rom")
-		, m_ram(*this, "ram", 0x10000, ENDIANNESS_LITTLE)
+		, m_ram_lo(*this, "ram_lo")
+		, m_ram_hi(*this, "ram_hi")
 		, m_rom_view(*this, "rom_view")
 		, m_con(*this, "con")
 		, m_prt(*this, "prt")
@@ -138,7 +139,9 @@ public:
 	{
 	}
 
-	virtual void stp_w(unsigned pin, int state) override;
+	virtual void stp_w(u32 pin, int state) override;
+
+	DECLARE_INPUT_CHANGED_MEMBER(e22_changed);
 
 protected:
 	virtual void device_start() override ATTR_COLD;
@@ -147,9 +150,6 @@ protected:
 	virtual void device_add_mconfig(machine_config &config) override ATTR_COLD;
 	virtual const tiny_rom_entry *device_rom_region() const override ATTR_COLD;
 	virtual ioport_constructor device_input_ports() const override ATTR_COLD;
-
-public:
-	DECLARE_INPUT_CHANGED_MEMBER(e22_changed);
 
 private:
 	static void floppy_formats(format_registration &fr);
@@ -184,7 +184,8 @@ private:
 
 	required_device<z80_device> m_cpu;
 	required_region_ptr<u8> m_rom;
-	memory_share_creator<u8> m_ram;
+	required_shared_ptr<u8> m_ram_lo;   // 0000-1FFF, under the ROM overlay
+	required_shared_ptr<u8> m_ram_hi;   // 2000-FFFF
 	memory_view m_rom_view;
 	required_device<i8251_device> m_con;
 	required_device<i8251_device> m_prt;
@@ -207,7 +208,8 @@ private:
 	u8 m_diag;          // port 98 latch
 	bool m_rtc;         // real time clock interrupt pending
 	bool m_irq;         // the Z80's INT line
-	bool m_power_init;  // port 88 bit 7
+	bool m_power_init;  // port 88 bit 7; set only at power-up as modelled (whether the
+	                    // terminal's INIT sets it too isn't known: schematic not checked)
 	bool m_hld;
 	bool m_dirc;         // 1793 DIRC: stepping in, toward the spindle
 	bool m_wg;           // 1793 write gate
@@ -216,10 +218,10 @@ private:
 	emu_timer *m_settle_timer;
 
 	// inputs to the receive side, for the loopback
-	int m_tc_txd, m_line_rxd, m_comm_rxd, m_printer_rxd;
-	int m_con_txd, m_gen_txd, m_prt_txd, m_com_txd;
-	int m_com_rts;
-	int m_tc_tclk, m_tc_rclk;
+	u8 m_tc_txd, m_line_rxd, m_comm_rxd, m_printer_rxd;
+	u8 m_con_txd, m_gen_txd, m_prt_txd, m_com_txd;
+	u8 m_com_rts;
+	u8 m_tc_tclk, m_tc_rclk;
 };
 
 
@@ -275,15 +277,11 @@ ioport_constructor vt100_stp_vt18x_device::device_input_ports() const
 
 void vt100_stp_vt18x_device::mem_map(address_map &map)
 {
-	map(0x2000, 0xffff).lrw8(
-			NAME([this] (offs_t offset) { return m_ram[0x2000 + offset]; }),
-			NAME([this] (offs_t offset, u8 data) { m_ram[0x2000 + offset] = data; }));
+	map(0x2000, 0xffff).ram().share(m_ram_hi);
 	map(0x0000, 0x1fff).view(m_rom_view);
-	m_rom_view[0](0x0000, 0x1fff).r(FUNC(vt100_stp_vt18x_device::rom_r));
-	m_rom_view[0](0x0000, 0x1fff).lw8(NAME([this] (offs_t offset, u8 data) { m_ram[offset] = data; }));
-	m_rom_view[1](0x0000, 0x1fff).lrw8(
-			NAME([this] (offs_t offset) { return m_ram[offset]; }),
-			NAME([this] (offs_t offset, u8 data) { m_ram[offset] = data; }));
+	// ROM overlay: reads come from the ROM, writes still reach the RAM beneath
+	m_rom_view[0](0x0000, 0x1fff).r(FUNC(vt100_stp_vt18x_device::rom_r)).writeonly().share(m_ram_lo);
+	m_rom_view[1](0x0000, 0x1fff).ram().share(m_ram_lo);
 }
 
 void vt100_stp_vt18x_device::io_map(address_map &map)
@@ -330,12 +328,13 @@ void vt100_stp_vt18x_device::drive_w(u8 data)
 
 u8 vt100_stp_vt18x_device::status_r()
 {
+	u16 const e22 = m_e22->read();
 	return (BIT(m_diag, 0) ? 0x01 : 0x00)
 		| (BIT(m_speed, 6) ? 0x02 : 0x00)
 		| (BIT(m_speed, 7) ? 0x04 : 0x00)
 		| (m_comm->ri_r() ? 0x00 : 0x08)
-		| ((BIT(m_e22->read(), 1) && !m_comm->cts_r()) ? 0x10 : 0x00)
-		| ((BIT(m_e22->read(), 3) && !m_comm->si_r()) ? 0x20 : 0x00)
+		| ((BIT(e22, 1) && !m_comm->cts_r()) ? 0x10 : 0x00)
+		| ((BIT(e22, 3) && !m_comm->si_r()) ? 0x20 : 0x00)
 		| (m_comm->dcd_r() ? 0x00 : 0x40)
 		| (m_power_init ? 0x80 : 0x00);
 }
@@ -353,11 +352,11 @@ u8 vt100_stp_vt18x_device::rtc_clear_r()
 
 void vt100_stp_vt18x_device::speed_w(u8 data)
 {
-	static constexpr u32 rates[8] = { 75, 150, 300, 600, 1200, 2400, 4800, 9600 };
+	static constexpr u32 RATES[8] = { 75, 150, 300, 600, 1200, 2400, 4800, 9600 };
 
 	m_speed = data;
-	m_prt_clk->set_unscaled_clock(rates[data & 7] * 16);
-	m_gen_clk->set_unscaled_clock(rates[(data >> 3) & 7] * 16);
+	m_prt_clk->set_unscaled_clock(RATES[data & 7] * 16);
+	m_gen_clk->set_unscaled_clock(RATES[(data >> 3) & 7] * 16);
 	comm_spds_update();
 }
 
@@ -454,8 +453,10 @@ void vt100_stp_vt18x_device::motor_update()
 	{
 		m_motor = motor;
 		for (auto &f : m_floppy)
+		{
 			if (f->get_device())
 				f->get_device()->mon_w(motor ? 0 : 1);
+		}
 	}
 	m_fdc->hlt_w((BIT(m_drive, 3) || m_settled) ? 1 : 0);
 }
@@ -498,7 +499,7 @@ void vt100_stp_vt18x_device::com_clocks_update()
 }
 
 
-void vt100_stp_vt18x_device::stp_w(unsigned pin, int state)
+void vt100_stp_vt18x_device::stp_w(u32 pin, int state)
 {
 	using stp = vt100_stp_slot_device;
 	switch (pin)
@@ -558,7 +559,6 @@ void vt100_stp_vt18x_device::init_board()
 
 void vt100_stp_vt18x_device::device_start()
 {
-
 	m_rtc_timer = timer_alloc(FUNC(vt100_stp_vt18x_device::rtc_tick), this);
 	// W6 grounds READY L, so the 1793 always sees the drive ready (6-78)
 	m_fdc->set_force_ready(true);
@@ -631,15 +631,19 @@ void vt100_stp_vt18x_device::device_reset()
 	slot().drive(stp::LINE_SPDS, 1);
 
 	m_drive = 0;
+}
+
+void vt100_stp_vt18x_device::device_reset_after_children()
+{
+	// the board latches clear, and what they drive in the 8251s, the 1793 and
+	// the drives follows.  Done after the children reset, which would otherwise
+	// undo it
 	m_fdc->set_floppy(m_floppy[0]->get_device());
 	m_fdc->dden_w(0);
 	motor_update();
 	speed_w(0);
 	diag_w(0);
-}
 
-void vt100_stp_vt18x_device::device_reset_after_children()
-{
 	// the printer connector's DTR is always on.  After the children, so that
 	// a device on the connector that answers DTR has started and been reset
 	m_printer->write_dtr(0);
@@ -653,13 +657,15 @@ void vt100_stp_vt18x_device::floppy_formats(format_registration &fr)
 	fr.add(FLOPPY_VT180_FORMAT);
 }
 
-static void vt18x_floppies(device_slot_interface &device)
+void vt18x_floppies(device_slot_interface &device)
 {
 	device.option_add("525ssdd", FLOPPY_525_SSDD);
 }
 
 void vt100_stp_vt18x_device::device_add_mconfig(machine_config &config)
 {
+	// the 2 MHz (CTL 2 MHz) and 1 MHz clocks below are divided down from the
+	// Z80's 4 MHz; the manual shows no separate crystal for them
 	Z80(config, m_cpu, 4_MHz_XTAL);
 	m_cpu->set_addrmap(AS_PROGRAM, &vt100_stp_vt18x_device::mem_map);
 	m_cpu->set_addrmap(AS_IO, &vt100_stp_vt18x_device::io_map);
@@ -667,19 +673,19 @@ void vt100_stp_vt18x_device::device_add_mconfig(machine_config &config)
 
 	INPUT_MERGER_ANY_HIGH(config, m_int).output_handler().set([this] (int state) { m_irq = state; m_cpu->set_input_line(INPUT_LINE_IRQ0, state); });
 
-	I8251(config, m_con, 2_MHz_XTAL);
+	I8251(config, m_con, 4_MHz_XTAL / 2);
 	m_con->txd_handler().set([this] (int state) { m_con_txd = state; slot().drive(vt100_stp_slot_device::TC_RXD, state); con_rxd_update(); });
 	m_con->rxrdy_handler().set(m_int, FUNC(input_merger_device::in_w<0>));
 
-	I8251(config, m_prt, 2_MHz_XTAL);
+	I8251(config, m_prt, 4_MHz_XTAL / 2);
 	m_prt->txd_handler().set([this] (int state) { m_prt_txd = state; m_printer->write_txd(state); gen_rxd_update(); });
 	m_prt->rxrdy_handler().set(m_int, FUNC(input_merger_device::in_w<1>));
 
-	I8251(config, m_gen, 2_MHz_XTAL);
+	I8251(config, m_gen, 4_MHz_XTAL / 2);
 	m_gen->txd_handler().set([this] (int state) { m_gen_txd = state; slot().drive(vt100_stp_slot_device::LINE_TXD, state); prt_rxd_update(); });
 	m_gen->rxrdy_handler().set(m_int, FUNC(input_merger_device::in_w<2>));
 
-	I8251(config, m_com, 2_MHz_XTAL);
+	I8251(config, m_com, 4_MHz_XTAL / 2);
 	m_com->txd_handler().set([this] (int state) { m_com_txd = state; comm_txd_update(); com_rxd_update(); });
 	m_com->dtr_handler().set(m_comm, FUNC(rs232_port_device::write_dtr));
 	m_com->rts_handler().set([this] (int state) { m_com_rts = state; comm_rts_update(); });
@@ -693,7 +699,7 @@ void vt100_stp_vt18x_device::device_add_mconfig(machine_config &config)
 	m_gen_clk->signal_handler().set(m_gen, FUNC(i8251_device::write_txc));
 	m_gen_clk->signal_handler().append(m_gen, FUNC(i8251_device::write_rxc));
 
-	FD1793(config, m_fdc, 1_MHz_XTAL);
+	FD1793(config, m_fdc, 4_MHz_XTAL / 4);
 	m_fdc->hld_wr_callback().set(FUNC(vt100_stp_vt18x_device::hld_w));
 	m_fdc->dirc_wr_callback().set([this] (int state) { m_dirc = state; });
 	m_fdc->wg_wr_callback().set([this] (int state) { m_wg = state; });
@@ -705,8 +711,14 @@ void vt100_stp_vt18x_device::device_add_mconfig(machine_config &config)
 	RS232_PORT(config, m_comm, default_rs232_devices, nullptr);
 	m_comm->rxd_handler().set([this] (int state) { m_comm_rxd = state; com_rxd_update(); });
 	m_comm->dsr_handler().set(m_com, FUNC(i8251_device::write_dsr));
-	m_comm->txc_handler().set([this] (int state) { if (BIT(m_diag, 2)) m_com->write_txc(state); });
-	m_comm->rxc_handler().set([this] (int state) { if (BIT(m_diag, 2)) m_com->write_rxc(state); });
+	m_comm->txc_handler().set([this] (int state) {
+		if (BIT(m_diag, 2))
+			m_com->write_txc(state);
+	});
+	m_comm->rxc_handler().set([this] (int state) {
+		if (BIT(m_diag, 2))
+			m_com->write_rxc(state);
+	});
 
 	RS232_PORT(config, m_printer, default_rs232_devices, nullptr);
 	m_printer->rxd_handler().set([this] (int state) { m_printer_rxd = state; prt_rxd_update(); });
