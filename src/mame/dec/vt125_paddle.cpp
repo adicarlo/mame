@@ -30,8 +30,11 @@
       as the computer port and 0A/0B as the auxiliary port
     - E3 and E8 clocked by the VT100's baud rate generator (TC TCLK/RCLK),
       which also still clocks the VT100's own 8251
-    - the handshake lines on the terminal side, and the VT100's DTR on
-      E3's DSR (the firmware tests it before starting the link)
+    - the handshake lines on the terminal side
+
+    Traced: E3's DSR is the VT100's DTR (STP finger A8-1, through 1489A E2),
+    which the firmware tests before starting the link; all three CTS inputs
+    are grounded.
 
 ***************************************************************************/
 
@@ -124,8 +127,8 @@ void vt125_paddle_device::stp_w(u32 pin, int state)
 		m_link->write_rxd(state);
 		break;
 	case stp::TC_DTR:
-		// the firmware checks DSR on the link before talking to the VT100
-		// (E3 status bit 7, at 189E), as the VT18X's console 8251 does
+		// through E2 (1489A); the firmware checks DSR on the link before
+		// talking to the VT100 (E3 status bit 7, at 189E)
 		m_link->write_dsr(state);
 		break;
 	case stp::LINE_RXD:

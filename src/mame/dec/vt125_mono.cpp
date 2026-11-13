@@ -17,12 +17,16 @@
     Print set MP01053 (VT125 field maintenance), sheets MB1-MB13, pdf
     pages 20-32.  Memory and I/O decode from MB7 (E40, E81) and MB9 (E92).
 
+    The vector generator (MB2, MB4-MB6) is modelled by behaviour, not
+    gate by gate: its sequencer PROM 23-070B1 and the bit map timing PROMs
+    are undumped.  What it does is taken from the firmware's own use of it
+    (see vector_go()), checked against the datapath on the prints.
+
     TODO:
-    - the vector generator (MB2, MB4-MB6), bit map (MB9-MB13) and video
-      out; the GO / DONE handshake completes at once for now
+    - video out from the bit map, and the output map
     - the five PROMs only this board has (23-067B1, 068B1, 069B1, 070B1,
       582A2) are undumped
-    - status bits D1, D2 (MEM DATA A/B) and D6 (CLK OUT H) read 0
+    - status bit D6 (CLK OUT H) reads 0
     - interrupt acknowledge cycles take no wait state here
 
 ***************************************************************************/
@@ -71,6 +75,7 @@ protected:
 
 private:
 	required_device<i8085a_cpu_device> m_cpu;
+	required_region_ptr<u8> m_dir;
 
 	vt125_paddle_cable_interface *m_paddle;
 	memory_passthrough_handler m_wait_taps[3];
@@ -81,11 +86,21 @@ private:
 	u8 m_graphics_flag;     // GRAPHICS FLAG L to the VT100, from the paddle
 	u8 m_clk_shift;         // CLK SHIFT from the paddle
 
+	static constexpr unsigned BITMAP_W = 768;
+	static constexpr unsigned BITMAP_H = 256;
+
 	u8 m_mode;              // MODE 0/1 (E56), from A1-A0 of the EXEC write
 	u16 m_x, m_y;           // vector generator position, 12 bits each
-	u8 m_error;
-	u8 m_file[4];           // vector generator register file (E59/E76)
+	u8 m_error;             // ERROR accumulator (E11/E74)
+	u8 m_file[4];           // register file (E59/E76): length, minor, direction, write mode
 	u8 m_pattern_ram[16];   // E89, 16 x 4 (only BD0/BD1 written)
+	u8 m_pattern;           // E28, rotating pattern shift register
+	u8 m_pmul;              // E88, pattern multiplier
+	u8 m_pmul_count;        // E87
+	u8 m_go;                // GO H (E38)
+	u8 m_mem_data;          // MEM DATA B/A (E116/E117 via E118): the last pixel read
+	emu_timer *m_done_timer;
+	std::unique_ptr<u8[]> m_bitmap; // 2 bits per pixel: plane A in bit 0, plane B in bit 1
 	u8 m_offset[6];         // ports 10-15 (E51)
 	u8 m_output_map[4];     // E46/E58, ports 18-1B
 
@@ -107,6 +122,13 @@ private:
 	void error_w(u8 data) { m_error = data; }
 	void pattern_ram_w(offs_t offset, u8 data) { m_pattern_ram[offset] = data & 0x03; }
 	void file_w(offs_t offset, u8 data) { m_file[offset] = data; }
+
+	u8 *pixel(u16 x, u16 y);
+	void read_pixel();
+	void write_pixel();
+	void shift_pattern();
+	void vector_go();
+	TIMER_CALLBACK_MEMBER(vector_done) { m_go = 0; }
 };
 
 
@@ -114,6 +136,7 @@ vt125_mono_device::vt125_mono_device(const machine_config &mconfig, const char *
 	: device_t(mconfig, VT125_MONO, tag, owner, clock)
 	, device_vt100_gport_interface(mconfig, *this)
 	, m_cpu(*this, "cpu")
+	, m_dir(*this, "dir")
 	, m_paddle(nullptr)
 	, m_init(0)
 	, m_graphics_flag(1)
@@ -122,6 +145,11 @@ vt125_mono_device::vt125_mono_device(const machine_config &mconfig, const char *
 	, m_x(0)
 	, m_y(0)
 	, m_error(0)
+	, m_pattern(0)
+	, m_pmul(0)
+	, m_pmul_count(0)
+	, m_go(0)
+	, m_mem_data(0)
 {
 	std::fill(std::begin(m_file), std::end(m_file), 0);
 	std::fill(std::begin(m_pattern_ram), std::end(m_pattern_ram), 0);
@@ -209,6 +237,9 @@ void vt125_mono_device::device_start()
 	// the circuit; the 8085A data sheet's READY timing wasn't to hand).
 	// Taps see opcode fetches too, so they cover every ROM cycle.
 	m_reset_timer = timer_alloc(FUNC(vt125_mono_device::reset_release), this);
+	m_done_timer = timer_alloc(FUNC(vt125_mono_device::vector_done), this);
+	m_bitmap = std::make_unique<u8[]>(BITMAP_W * BITMAP_H);
+	std::fill_n(m_bitmap.get(), BITMAP_W * BITMAP_H, 0);
 
 	auto wait = [this] (offs_t, u8 &, u8) { m_cpu->adjust_icount(-1); };
 	address_space &prog = m_cpu->space(AS_PROGRAM);
@@ -228,11 +259,19 @@ void vt125_mono_device::device_start()
 	save_item(NAME(m_pattern_ram));
 	save_item(NAME(m_offset));
 	save_item(NAME(m_output_map));
+	save_item(NAME(m_pattern));
+	save_item(NAME(m_pmul));
+	save_item(NAME(m_pmul_count));
+	save_item(NAME(m_go));
+	save_item(NAME(m_mem_data));
+	save_pointer(NAME(m_bitmap), BITMAP_W * BITMAP_H);
 }
 
 void vt125_mono_device::device_reset()
 {
 	m_mode = 0;
+	m_go = 0;
+	m_done_timer->adjust(attotime::never);
 
 	// Power-up reset: RST IN is R27 560K / C112 1uF (MB7), against the
 	// VT100's 8224 RESIN on R2 10K / C10 39uF (MP-00633 BV6).  Both are
@@ -278,14 +317,16 @@ void vt125_mono_device::trans_ready_w(int state)
 }
 
 
-// RD STAT (E35).  The bit order is read from the drop nesting on MB7, which
-// is hard to follow; the firmware polls D0 and D7 as INIT and GO.
+// RD STAT (E35, MB7): D0 INIT H, D1/D2 MEM DATA A/B, D3 V BLANK H, D4/D5
+// tied high, D6 CLK OUT H, D7 GO L.  MEM DATA is latched by STROBE (MB4
+// E116/E117): the pixel the vector generator last read, before its write.
 u8 vt125_mono_device::status_r()
 {
 	return (m_init ? 0x01 : 0x00)
+			| (m_mem_data << 1)
 			| (screen().vblank() ? 0x08 : 0x00)
 			| 0x30
-			| 0x80; // GO L: the vector generator is idle
+			| (m_go ? 0x00 : 0x80);
 }
 
 u8 vt125_mono_device::in_com_r(offs_t offset)
@@ -305,8 +346,139 @@ void vt125_mono_device::exec_w(offs_t offset, u8 data)
 {
 	m_mode = offset & 3;
 	if (BIT(data, 0))
+	{
 		LOGVG("%s: GO mode %d at %d,%d file %02x %02x %02x %02x error %02x\n", machine().describe_context(),
 				m_mode, m_x, m_y, m_file[0], m_file[1], m_file[2], m_file[3], m_error);
+		vector_go();
+	}
+}
+
+
+// The bit map is 768 x 256 pixels of two planes.  Y counts half lines:
+// memory rows are Y8-Y1 (MB13 address muxes), and Y0 only gates writes.
+// X9-X0 above 767 (PX9 = PX8 = 1), and any of X11, X10, Y11-Y9 set, is off
+// the map: E93 writes nothing there (MB13).  23-060B1 packs the X address
+// as 12 pixels to a word (word = X9-X2 / 3), which only matters for the
+// layout in DRAM, not here.
+u8 *vt125_mono_device::pixel(u16 x, u16 y)
+{
+	if (x >= BITMAP_W || y >= BITMAP_H * 2)
+		return nullptr;
+	return &m_bitmap[(y >> 1) * BITMAP_W + x];
+}
+
+// Every step is a memory cycle at the new position: the read half latches
+// MEM DATA whether or not the write half goes ahead (inferred from E116/
+// E117 being clocked by STROBE from E66, the bit map cycle PROM)
+void vt125_mono_device::read_pixel()
+{
+	u8 const *const p = pixel(m_x, m_y);
+	m_mem_data = p ? *p : 0x03; // off the map, nothing drives MDA/MDB (inferred: pulled up)
+}
+
+// One pixel write, a read-modify-write of both planes through the "pattern
+// RAM" E89 (MB4): it is addressed by FILE entry 3 bit 0, the pattern bit
+// and the pixel's old plane B and A bits, and its outputs are inverted
+// (74S189)
+void vt125_mono_device::write_pixel()
+{
+	u8 *const p = pixel(m_x, m_y);
+	if (p)
+	{
+		unsigned const index = (BIT(m_file[3], 0) << 3) | (BIT(m_pattern, 7) << 2) | *p;
+		*p = ~m_pattern_ram[index] & 0x03;
+	}
+}
+
+// The pattern register E28 rotates one bit, MSB first, every 16 - PMUL
+// steps: E87 counts up from PMUL and reloads at its carry, which shifts E28
+void vt125_mono_device::shift_pattern()
+{
+	if (m_pmul_count == 0x0f)
+	{
+		m_pmul_count = m_pmul;
+		m_pattern = (m_pattern << 1) | (m_pattern >> 7);
+	}
+	else
+		m_pmul_count++;
+}
+
+// The vector generator, run to completion at GO; GO L then reads low for
+// as long as the hardware takes: one memory cycle of the 5-state E62 ring,
+// on CHAR CLK, per step (inferred).
+//
+// Its sequencer PROM 23-070B1 is undumped.  The cycle below is the VK100's
+// (same datapath and the same 23-059B1 direction PROM; its sequencer
+// 23-058B1 is dumped), and it reproduces the VT125 firmware's own vector
+// self-test pattern (0x0290-0x02F2 against the table at 0x0328) bit for
+// bit.  The register file holds DU (major length), DVM (one's complement
+// of the minor length), DIR and the write op, in entries 0-3.
+//
+// A vector is DU + 1 memory cycles.  In each, STROBE latches MEM DATA
+// from the pixel at X,Y and the carry of ERROR + DVM + 1 as C OUT; ERROR
+// takes that sum and, on a borrow, DU is added back.  The pixel at X,Y is
+// written if 059B1 enabled the write at the step before; then VECTOR CLK
+// steps X and Y as 059B1 says from DIR, C OUT, Y0 and its own feedback bit
+// (E49, preset while GO is low).  DIR 8-F is an octant: a carry steps the
+// major axis, a borrow diagonally; DIR 0-7 steps one fixed way.  059B1
+// writes only when a step reaches a new memory row or column, since Y is
+// in half lines.  In the last cycle (DCOUNT out) 059B1 is disabled: no
+// step, and ERROR is not loaded.  So the start point is not written and
+// the end point is.  MODE 0 moves, 1 writes the pixel at X,Y once, 2
+// draws, 3 erases the map.
+void vt125_mono_device::vector_go()
+{
+	attotime const cycle = attotime::from_ticks(5, 24.0734_MHz_XTAL * 2 / 3 / 2);
+	unsigned cycles;
+
+	if (m_mode == 3)
+	{
+		// ERASE (E71 D7 to E66 and E93): every word of the map in turn, all
+		// three banks at once (inferred: one memory cycle per 12 pixels)
+		for (unsigned i = 0; i < BITMAP_W * BITMAP_H; i++)
+		{
+			unsigned const index = (BIT(m_file[3], 0) << 3) | (BIT(m_pattern, 7) << 2) | m_bitmap[i];
+			m_bitmap[i] = ~m_pattern_ram[index] & 0x03;
+		}
+		cycles = BITMAP_W * BITMAP_H / 12;
+	}
+	else if (m_mode == 1)
+	{
+		read_pixel();
+		write_pixel();
+		cycles = 1;
+	}
+	else
+	{
+		unsigned const du = m_file[0];
+		u8 feedback = 1, write = 0;
+		for (unsigned c = 0; c <= du; c++)
+		{
+			unsigned const sum = m_error + m_file[1] + 1;
+			bool const cout = BIT(sum, 8);
+			read_pixel();
+			if (m_mode == 2 && write)
+				write_pixel();
+			if (m_mode == 2 && c)
+				shift_pattern();
+			if (c == du)
+				break;
+
+			m_error = sum + (cout ? 0 : du);
+
+			u8 const d = m_dir[(feedback << 6) | (BIT(m_y, 0) << 5) | (cout << 4) | (m_file[2] & 0x0f)];
+			if (!BIT(d, 0))
+				m_x = (m_x + (BIT(d, 3) ? -1 : 1)) & 0xfff;
+			if (!BIT(d, 1))
+				m_y = (m_y + (BIT(d, 2) ? -1 : 1)) & 0xfff;
+			write = BIT(d, 4);
+			feedback = BIT(d, 5);
+		}
+		cycles = du + 1;
+	}
+
+	m_go = 1;
+	m_done_timer->adjust(cycle * cycles);
 }
 
 // E51: 10 minor offset, 11 horizontal offset, 12 vertical offset, 13
@@ -315,6 +487,17 @@ void vt125_mono_device::offset_w(offs_t offset, u8 data)
 {
 	if (offset < std::size(m_offset))
 		m_offset[offset] = data;
+
+	switch (offset)
+	{
+	case 3: // LD PAT: E28 parallel load, and E87 reloads from PMUL
+		m_pattern = data;
+		m_pmul_count = m_pmul;
+		break;
+	case 4: // LD PMU: E88 latches D3-D0
+		m_pmul = data & 0x0f;
+		break;
+	}
 }
 
 // the output map: four 8-bit entries, two 74LS670s (MB1)
