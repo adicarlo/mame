@@ -81,6 +81,7 @@ DEFINE_DEVICE_TYPE(RAINBOW_VIDEO, rainbow_video_device, "rainbow_video", "Rainbo
 vt100_video_device::vt100_video_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock)
 	: device_t(mconfig, type, tag, owner, clock)
 	, device_video_interface(mconfig, *this)
+	, m_graphics_cb(*this)
 	, m_read_ram(*this, 0)
 	, m_write_vert_freq_intr(*this)
 	, m_write_lba3_lba4(*this)
@@ -117,6 +118,7 @@ void vt100_video_device::device_start()
 	m_lba3_change_timer = timer_alloc(FUNC(vt100_video_device::lba3_change), this);
 
 	screen().register_vblank_callback(vblank_state_delegate(&vt100_video_device::vblank_callback, this));
+	m_graphics_cb.resolve();
 
 	save_item(NAME(m_lba7));
 	save_item(NAME(m_scroll_latch));
@@ -513,10 +515,49 @@ void vt100_video_device::video_update(bitmap_ind16 &bitmap, const rectangle &cli
 					draw(x, 0x7f, display_type, false, false, false, false, false);
 				}
 			}
+
+			for (int field = 0; field < (m_linedoubler ? 2 : 1); field++)
+				draw_graphics(bitmap, y + field, scan - first_scan);
 		}
 
 		scan_counter = (scan_counter + 1) % 10;
 		offset_counter = (offset_counter + 1) % 10;
+	}
+}
+
+// The graphics inputs light a dot bright wherever they are asserted (TM-003
+// 8.1: both GRAPHICS 1 IN L and GRAPHICS 2 IN L low; the M7071 drives
+// both from one gate).  The M7071 locks its dot clock to horizontal blank,
+// 662 or 800 dots a line (EK-VT105-TM-001 6.5).  Inferred: its first dot
+// falls one 80-column character cell into the text area in rectangular
+// format (T105 6.4 leaves "one character column" at the left, and 512
+// dots then end exactly at column 80), and 3.6 us later in square format
+// (5.12 against 1.52 us from blank); the same times in 132 columns.
+void vt100_video_device::draw_graphics(bitmap_ind16 &bitmap, int y, int line)
+{
+	if (m_graphics_cb.isnull() || y < 0 || y > bitmap.height() - 1)
+		return;
+
+	uint8_t dots[512];
+	int const format = m_graphics_cb(line, dots);
+	if (format == 0)
+		return;
+
+	double const pixclk = (m_columns == 132) ? clock() : clock() * 2.0 / 3.0;
+	double const line_period = double(m_columns == 132 ? 1530 : 1020) / pixclk;
+	double const dot = line_period / ((format == 2) ? 800 : 662);
+	double const origin = 10.0 / (clock() * 2.0 / 3.0) + ((format == 2) ? 3.6e-6 : 0.0);
+
+	uint16_t *const row = &bitmap.pix(y);
+	int const width = bitmap.width();
+	for (int i = 0; i < 512; i++)
+	{
+		if (!dots[i])
+			continue;
+		int const x0 = int((origin + i * dot) * pixclk);
+		int const x1 = std::max(x0 + 1, int((origin + (i + 1) * dot) * pixclk));
+		for (int x = x0; x < x1 && x < width; x++)
+			row[x] = 3;
 	}
 }
 

@@ -21,8 +21,15 @@ class vt100_video_device : public device_t,
 	public device_video_interface
 {
 public:
+	// GRAPHICS 1/2 IN L from the graphics connector for one scan line,
+	// counted from the end of vertical blank: fills 512 dots (nonzero =
+	// lit) and returns 0 for none, 1 for 512 dots at line/662 (10.4 MHz),
+	// 2 for 512 dots at line/800 (12.4 MHz)
+	typedef device_delegate<int (int line, uint8_t *dots)> graphics_delegate;
+
 	vt100_video_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock);
 
+	template <typename... T> void set_graphics_callback(T &&... args) { m_graphics_cb.set(std::forward<T>(args)...); }
 	auto ram_rd_callback() { return m_read_ram.bind(); }
 	auto vert_freq_intr_wr_callback() { return m_write_vert_freq_intr.bind(); }
 	auto lba3_lba4_wr_callback() { return m_write_lba3_lba4.bind(); }
@@ -50,12 +57,14 @@ protected:
 	void vblank_callback(screen_device &screen, bool state);
 	void display_char(bitmap_ind16 &bitmap, uint8_t code, int x, int y, uint8_t scroll_region, uint8_t display_type, bool invert, bool bold, bool blink, bool underline, bool blank);
 	void apply_brightness();
+	void draw_graphics(bitmap_ind16 &bitmap, int y, int line);
 	void draw_scan(bitmap_ind16 &bitmap, int y_preset, int x, uint8_t code, int i, uint8_t display_type, bool invert, bool bold, bool blink, bool underline, bool blank, bool also_next_row);
 	TIMER_CALLBACK_MEMBER(lba3_change);
 	TIMER_CALLBACK_MEMBER(lba7_change);
 	virtual void notify_vblank(bool choice) { }
 	virtual void vertical_reset();
 
+	graphics_delegate  m_graphics_cb;
 	devcb_read8        m_read_ram;
 	devcb_write_line   m_write_vert_freq_intr;
 	devcb_write8       m_write_lba3_lba4;
