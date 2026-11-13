@@ -47,6 +47,7 @@
 #include "machine/rstbuf.h"
 #include "vt100_altchar.h"
 #include "vt100_avo.h"
+#include "vt100_gport.h"
 #include "vt100_kbd.h"
 #include "vt100_stp.h"
 #include "vtvideo.h"
@@ -76,6 +77,7 @@ public:
 		m_phosphor(*this, "phosphor"),
 		m_avo(*this, "avo"),
 		m_stp(*this, "stp"),
+		m_graphics(*this, "graphics"),
 		m_localclk(*this, "localclk"),
 		m_altchar(*this, "altchar"),
 		m_chargen(*this, "chargen")
@@ -93,7 +95,6 @@ private:
 	// Options fitted to this model, reported to the firmware through the
 	// flag buffer (E42).  flags_r() turns them into the bus bits.
 	static constexpr u8 OPT_AVO = 0x01; // Advanced Video Option
-	static constexpr u8 OPT_GRAPHICS = 0x02; // VT105 waveform graphics board
 
 	required_device<cpu_device> m_maincpu;
 	required_device<vt100_video_device> m_crtc;
@@ -110,6 +111,7 @@ private:
 	required_ioport m_phosphor;
 	optional_device<vt100_avo_slot_device> m_avo; // VT100 board AVO connector (J1)
 	optional_device<vt100_stp_slot_device> m_stp; // VT100 board Standard Terminal Port (J3)
+	optional_device<vt100_gport_slot_device> m_graphics; // VT100 board graphics connector (J2)
 	optional_device<clock_device> m_localclk; // LOCAL CLK to the STP
 	required_device<vt100_altchar_slot_device> m_altchar; // alternate character ROM socket (E9; E4 on the VT101/VT102)
 	required_region_ptr<u8> m_chargen;
@@ -119,6 +121,7 @@ private:
 	u8 m_modem = 0xf0; // modem buffer inputs: CD, RI, SPDI, CTS in D4-D7
 
 	u8 flags_r();
+	int graphics_scan(int line, u8 *dots) { return m_graphics ? m_graphics->scan(line, dots) : 0; }
 	u8 modem_r();
 	template <unsigned Bit> void modem_w(int state) { m_modem = (m_modem & ~(1 << Bit)) | (state << Bit); }
 	void nvr_latch_w(u8 data);
@@ -218,7 +221,7 @@ u8 vt100_state::flags_r()
 	// say whether theirs is built in
 	bool const avo = m_avo ? m_avo->present() : bool(m_options & OPT_AVO);
 	ret |= avo ? 0 : 0x02;
-	ret |= (m_options & OPT_GRAPHICS) ? 0 : 0x04;
+	ret |= (m_graphics && !m_graphics->flag_r()) ? 0 : 0x04;
 	ret |= (m_stp && m_stp->present()) ? 0x08 : 0; // OPTION PRESENT H
 	ret |= m_even_field_high ? 0x10 : 0;
 	ret |= !m_nvr->data_r() << 5;
@@ -281,8 +284,8 @@ void vt100_state::vt100_io(address_map &map)
 	map(0xa2, 0xa2).w(m_crtc, FUNC(vt100_video_device::dc012_w));
 	// 0xC2 Video processor DC011
 	map(0xc2, 0xc2).w(m_crtc, FUNC(vt100_video_device::dc011_w));
-	// 0xE2 Graphics port
-	// map(0xe2, 0xe2)
+	// 0xE2 Graphics port (GRAPHIC WRITE L to J2)
+	map(0xe2, 0xe2).lw8(NAME([this] (u8 data) { if (m_graphics) m_graphics->write(data); }));
 }
 
 u8 vt100_state::printer_r(offs_t offset)
@@ -441,6 +444,8 @@ void vt100_state::vt100(machine_config &config)
 	VT100_AVO_SLOT(config, m_avo, vt100_avo_options, "avo");
 	m_avo->set_space(m_maincpu, AS_PROGRAM);
 
+	VT100_GPORT_SLOT(config, m_graphics, vt100_gport_options, nullptr, "screen");
+
 	/* video hardware */
 	screen_device &screen(SCREEN(config, "screen").set_color(rgb_t::green()));
 	screen.set_raw(XTAL(24'073'400)*2/3, 102*10, 0, 80*10, 262, 0, 25*10);
@@ -456,6 +461,7 @@ void vt100_state::vt100(machine_config &config)
 	VT100_VIDEO(config, m_crtc, XTAL(24'073'400));
 	m_crtc->set_screen("screen");
 	m_crtc->set_chargen("chargen");
+	m_crtc->set_graphics_callback(FUNC(vt100_state::graphics_scan));
 	VT100_ALTCHAR_SLOT(config, m_altchar, vt100_altchar_options, nullptr);
 	m_crtc->ram_rd_callback().set(FUNC(vt100_state::video_ram_r));
 	m_crtc->vert_freq_intr_wr_callback().set(m_rstbuf, FUNC(rst_pos_buffer_device::rst4_w));
@@ -533,15 +539,13 @@ void vt100_state::vt180(machine_config &config)
 	m_stp->set_default_option("vt18x");
 }
 
-// VT105: the M7071 waveform graphics board pulls GRAPHICS FLAG low to say
-// it is fitted, then drives it high while busy storing a character
-// (TM-003 6.4.1).  The board isn't emulated, so the flag stays low:
-// fitted and never busy.
+// VT105: a VT100 with the M7071 waveform generator on the graphics
+// connector
 void vt100_state::vt105(machine_config &config)
 {
 	vt100(config);
 
-	m_options |= OPT_GRAPHICS;
+	m_graphics->set_default_option("m7071");
 }
 
 void vt100_state::vt101(machine_config &config)
@@ -556,6 +560,7 @@ void vt100_state::vt101(machine_config &config)
 	m_even_field_high = true;
 
 	config.device_remove("avo"); // no AVO connector; the VT102's is on the board
+	config.device_remove("graphics"); // no graphics connector (GRAPHICS FLAG L tied high)
 
 	// no STP either: the 8251 goes straight to the communication port.  The
 	// board's J3 is only the 20 mA adapter's TXD/RXD header (MP-01066 sheet
