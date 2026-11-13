@@ -24,7 +24,6 @@
     (see vector_go()), checked against the datapath on the prints.
 
     TODO:
-    - ERASE runs at once rather than behind the display refresh
     - the five PROMs only this board has (23-067B1, 068B1, 069B1, 070B1,
       582A2) are undumped
     - status bit D6 (CLK OUT H) reads 0
@@ -135,6 +134,9 @@ private:
 	void shift_pattern();
 	void vector_go();
 	TIMER_CALLBACK_MEMBER(vector_done) { m_go = 0; }
+	TIMER_CALLBACK_MEMBER(erase_line);
+	emu_timer *m_erase_timer;
+	u8 m_vcount;            // V counter E48/E80 as loaded for this field
 };
 
 
@@ -157,6 +159,7 @@ vt125_mono_device::vt125_mono_device(const machine_config &mconfig, const char *
 	, m_pmul_count(0)
 	, m_go(0)
 	, m_mem_data(0)
+	, m_vcount(0)
 {
 	std::fill(std::begin(m_file), std::end(m_file), 0);
 	std::fill(std::begin(m_pattern_ram), std::end(m_pattern_ram), 0);
@@ -253,6 +256,7 @@ void vt125_mono_device::device_start()
 	// Taps see opcode fetches too, so they cover every ROM cycle.
 	m_reset_timer = timer_alloc(FUNC(vt125_mono_device::reset_release), this);
 	m_done_timer = timer_alloc(FUNC(vt125_mono_device::vector_done), this);
+	m_erase_timer = timer_alloc(FUNC(vt125_mono_device::erase_line), this);
 	m_bitmap = std::make_unique<u8[]>(BITMAP_W * BITMAP_H);
 	std::fill_n(m_bitmap.get(), BITMAP_W * BITMAP_H, 0);
 
@@ -279,6 +283,7 @@ void vt125_mono_device::device_start()
 	save_item(NAME(m_pmul_count));
 	save_item(NAME(m_go));
 	save_item(NAME(m_mem_data));
+	save_item(NAME(m_vcount));
 	save_pointer(NAME(m_bitmap), BITMAP_W * BITMAP_H);
 }
 
@@ -287,6 +292,7 @@ void vt125_mono_device::device_reset()
 	m_mode = 0;
 	m_go = 0;
 	m_done_timer->adjust(attotime::never);
+	m_erase_timer->adjust(attotime::never);
 
 	// Power-up reset: RST IN is R27 560K / C112 1uF (MB7), against the
 	// VT100's 8224 RESIN on R2 10K / C10 39uF (MP-00633 BV6).  Both are
@@ -313,10 +319,15 @@ void vt125_mono_device::init_w(int state)
 }
 
 // V BLANK H (VERT BLANK L from the VT100, inverted by E78) is RST 7.5,
-// which latches on the rising edge, the start of vertical blank
+// which latches on the rising edge, the start of vertical blank.  V STROBE
+// loads the V counter from V OFFSET for the next field (inferred: as
+// vertical blank ends, after the firmware's RST 7.5 handler has rewritten
+// it).
 void vt125_mono_device::vblank(screen_device &screen, bool state)
 {
 	m_cpu->set_input_line(I8085_RST75_LINE, state ? ASSERT_LINE : CLEAR_LINE);
+	if (!state)
+		m_vcount = m_offset[2];
 }
 
 // READ READY and TRANS READY: the paddle's three 8251s' RxRDY and TxRDY,
@@ -360,7 +371,15 @@ void vt125_mono_device::out_com_w(offs_t offset, u8 data)
 void vt125_mono_device::exec_w(offs_t offset, u8 data)
 {
 	m_mode = offset & 3;
-	if (BIT(data, 0))
+	if (!BIT(data, 0))
+	{
+		// GO H (E38) is clocked from D0: a 0 stops an ERASE, which runs
+		// until then
+		m_go = 0;
+		m_done_timer->adjust(attotime::never);
+		m_erase_timer->adjust(attotime::never);
+	}
+	else
 	{
 		LOGVG("%s: GO mode %d at %d,%d file %02x %02x %02x %02x error %02x\n", machine().describe_context(),
 				m_mode, m_x, m_y, m_file[0], m_file[1], m_file[2], m_file[3], m_error);
@@ -448,14 +467,9 @@ void vt125_mono_device::vector_go()
 
 	if (m_mode == 3)
 	{
-		// ERASE (E71 D7 to E66 and E93): every word of the map in turn, all
-		// three banks at once (inferred: one memory cycle per 12 pixels)
-		for (unsigned i = 0; i < BITMAP_W * BITMAP_H; i++)
-		{
-			unsigned const index = (BIT(m_file[3], 0) << 3) | (BIT(m_pattern, 7) << 2) | m_bitmap[i];
-			m_bitmap[i] = ~m_pattern_ram[index] & 0x03;
-		}
-		cycles = BITMAP_W * BITMAP_H / 12;
+		m_go = 1;
+		m_erase_timer->adjust(screen().time_until_pos((screen().vpos() + 1) % screen().height()));
+		return;
 	}
 	else if (m_mode == 1)
 	{
@@ -494,6 +508,29 @@ void vt125_mono_device::vector_go()
 
 	m_go = 1;
 	m_done_timer->adjust(cycle * cycles);
+}
+
+// ERASE (TM-003 6-86; E71 D7 to E66 and E93): forces the bit map timing to
+// read, and writes the background through E89 into every word the
+// display refresh reads, so a row is erased as it is scanned, until the
+// firmware drops GO.  It shows only the 240 rows from V OFFSET, so the
+// firmware runs two passes, at offsets 01 and 80, a couple of fields each
+// (423D), with the output map blanked.  Inferred: all three banks write at
+// once (E93 is undumped) and nothing is written in vertical blank.
+TIMER_CALLBACK_MEMBER(vt125_mono_device::erase_line)
+{
+	int const vpos = screen().vpos();
+	int const line = vpos ? vpos - 1 : screen().height() - 1;
+	if (line < 240)
+	{
+		u8 *const row = &m_bitmap[((m_vcount + line) & 0xff) * BITMAP_W];
+		for (unsigned i = 0; i < BITMAP_W; i++)
+		{
+			unsigned const index = (BIT(m_file[3], 0) << 3) | (BIT(m_pattern, 7) << 2) | row[i];
+			row[i] = ~m_pattern_ram[index] & 0x03;
+		}
+	}
+	m_erase_timer->adjust(screen().time_until_pos((vpos + 1) % screen().height()));
 }
 
 // E51: 10 minor offset, 11 horizontal offset, 12 vertical offset, 13
