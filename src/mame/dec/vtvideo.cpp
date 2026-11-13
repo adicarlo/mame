@@ -15,17 +15,22 @@ Details (termination characters, option hardware, MHFU watchdog) differ when com
 As of July 2014, the Rainbow video section is more mature than the 'VT100_VIDEO' part (essentially unchanged since 2009).
 List of features not yet ported to VT: line doubler; 48 line mode; soft scroll; intensity / palette, AVO (ext.attributes)
 
+As of November 2026 the VT side has smooth scroll and split screen scrolling
+(per-scan DC012 counters, TM 4.6.3.3 and 4.7.9; Rainbow keeps its own loop),
+interlaced line doubling, and AVO attributes (vt100_avo.cpp).  Still missing
+on VT: the brightness register (brightness_w).  48 lines are Rainbow only.
+
 FIXME: work out the differences and identify common code between VT and Rainbow. Unify different code trees.
 
 - REQUIRED TODOS / TESTS :
   * do line and character attributes (plus combinations) match real hardware?
-  * how does the AVO fit in?
+  * how does the AVO fit in? (VT: done, see above)
 
-- SCROLLING REGIONS / SPLIT SCREEN SCROLLING UNTESTED (if you open > 1 file with the VAX editor EDT)
+- SCROLLING REGIONS / SPLIT SCREEN SCROLLING UNTESTED on Rainbow (if you open > 1 file with the VAX editor EDT); VT: done, see above
   See VT100 Technical Manual: 4.7.4 Address Shuffling to 4.7.9 Split Screen Smooth Scrolling.
   More on scrolling regions: Rainbow 100 B technical documentation (QV069-GZ) April 1985 page 22
 
-- NEW - INTERLACED MODE (Rainbow only):
+- NEW - INTERLACED MODE (Rainbow; VT: done, see above):
   Vertical resolution increases from 240 to 480, while the refresh rate halves (flickers on CRTs).
   To accomplish this, the display controller repeats even lines in odd scans.
   VTVIDEO activates line doubling in 24 line, interlaced mode only.

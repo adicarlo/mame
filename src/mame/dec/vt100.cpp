@@ -7,7 +7,6 @@
         29/04/2009 Preliminary driver.
 
         TODO: some video attributes are not fully supported yet
-        TODO: finish support for the on-CPU board alternate character set ROM
         TODO: STP (standard terminal port) options beyond the VT1XX-AC (VT125)
 
         An enormous amount of useful info can be derived from the VT125 technical manual:
