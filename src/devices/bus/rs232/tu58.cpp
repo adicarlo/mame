@@ -92,7 +92,11 @@
 #include "machine/clock.h"
 #include "machine/i8155.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 #define LOG_MOTION (1U << 1)
 #define LOG_WRITE  (1U << 2)
@@ -108,12 +112,24 @@
 //  CARTRIDGE AND DRIVE
 //**************************************************************************
 
+namespace {
+
 // Positions are in bit cells of 1/800 in from the physical start of tape.
 class tu58_cartridge_device : public microtape_image_device
 {
 public:
+	enum event_kind : u8 { NONE, BOUNDARY, SETPOINT, REVERSAL };
+	struct event
+	{
+		attotime when;   // from now; never if nothing will happen
+		u8 kind;         // a cell boundary, the set point reached, or speed zero
+		s64 pos;         // the boundary
+		s8 dir;          // the direction it is crossed in
+	};
+
 	static constexpr int RECORDS = 1024;           // per track
-	static constexpr int IMAGE_SIZE = 2 * RECORDS * 128;
+	static constexpr u32 RECORD_BYTES = 128;
+	static constexpr u32 IMAGE_SIZE = 2 * RECORDS * RECORD_BYTES;
 	static constexpr int MARK_LEN = 4;
 	static constexpr s64 BOT_LEN = 2000 * MARK_LEN;
 	static constexpr s64 EOT_LEN = 2000 * MARK_LEN;
@@ -135,6 +151,9 @@ public:
 	virtual const char *file_extensions() const noexcept override { return "dsk,tu58,img"; }
 	virtual const char *image_interface() const noexcept override { return "tu58"; }
 
+	// called with the new state whenever a cartridge goes in or comes out
+	auto present_callback() { return m_present_cb.bind(); }
+
 	bool present() const { return m_present; }
 	bool write_protected() const { return !m_present || is_readonly(); }
 
@@ -144,14 +163,6 @@ public:
 	double pos();
 	bool stalled() const { return m_stalled; }
 
-	enum event_kind : u8 { NONE, BOUNDARY, SETPOINT, REVERSAL };
-	struct event
-	{
-		attotime when;   // from now; never if nothing will happen
-		u8 kind;         // a cell boundary, the set point reached, or speed zero
-		s64 pos;         // the boundary
-		int dir;         // the direction it is crossed in
-	};
 	event next_event();
 	void arrive(const event &ev);
 
@@ -173,9 +184,11 @@ private:
 	u32 image_offset(int track, int record) const;
 	void state_at(const attotime &t, double &p, double &v) const;
 
+	devcb_write_line m_present_cb;
+
 	bool m_present;
-	std::vector<u8> m_data;
-	std::vector<s32> m_checksum;   // per physical record: -1 to compute from the data
+	std::array<u8, IMAGE_SIZE> m_data;
+	std::array<s32, 2 * RECORDS> m_checksum;   // per physical record: -1 to compute from the data
 
 	attotime m_t0;
 	double m_p0;
@@ -184,19 +197,24 @@ private:
 	bool m_stalled;
 };
 
-DEFINE_DEVICE_TYPE(TU58_CARTRIDGE, tu58_cartridge_device, "tu58_cartridge", "DEC TU58 cartridge drive")
+} // anonymous namespace
+
+DEFINE_DEVICE_TYPE_PRIVATE(TU58_CARTRIDGE, tu58_cartridge_device, tu58_cartridge_device, "tu58_cartridge", "DEC TU58 cartridge drive")
+
+namespace {
 
 tu58_cartridge_device::tu58_cartridge_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock)
 	: microtape_image_device(mconfig, TU58_CARTRIDGE, tag, owner, clock)
+	, m_present_cb(*this)
 	, m_present(false)
-	, m_data(IMAGE_SIZE, 0)
-	, m_checksum(2 * RECORDS, -1)
+	, m_data{}
 	, m_t0(attotime::zero)
 	, m_p0(LOAD_POS)
 	, m_v0(0.0)
 	, m_sp(0.0)
 	, m_stalled(false)
 {
+	m_checksum.fill(-1);
 }
 
 void tu58_cartridge_device::device_start()
@@ -213,12 +231,12 @@ void tu58_cartridge_device::device_start()
 
 std::pair<std::error_condition, std::string> tu58_cartridge_device::call_load()
 {
-	std::fill(m_data.begin(), m_data.end(), 0);
-	std::fill(m_checksum.begin(), m_checksum.end(), -1);
-	if (length() > IMAGE_SIZE)
-		return std::make_pair(image_error::INVALIDLENGTH, "Image is larger than a TU58 cartridge (262,144 bytes)");
+	if (length() != IMAGE_SIZE)
+		return std::make_pair(image_error::INVALIDLENGTH, "Image is not the size of a TU58 cartridge (262,144 bytes)");
 	fseek(0, SEEK_SET);
-	fread(m_data.data(), length());
+	if (fread(m_data.data(), IMAGE_SIZE) != IMAGE_SIZE)
+		return std::make_pair(image_error::UNSPECIFIED, "Error reading the image file");
+	m_checksum.fill(-1);
 
 	// a cartridge goes in rewound, as the firmware leaves it: just past BOT
 	rebase();
@@ -226,6 +244,7 @@ std::pair<std::error_condition, std::string> tu58_cartridge_device::call_load()
 	m_v0 = 0.0;
 	m_stalled = false;
 	m_present = true;
+	m_present_cb(1);
 	return std::make_pair(std::error_condition(), std::string());
 }
 
@@ -240,13 +259,14 @@ std::pair<std::error_condition, std::string> tu58_cartridge_device::call_create(
 void tu58_cartridge_device::call_unload()
 {
 	m_present = false;
+	m_present_cb(0);
 }
 
 u32 tu58_cartridge_device::image_offset(int track, int record) const
 {
 	// undo the firmware's rotate: physical record R' -> logical record R
 	const u32 p = record + track * RECORDS;
-	return (((p >> 1) | ((p & 1) << 10)) & 0x7ff) * 128;
+	return (((p >> 1) | ((p & 1) << 10)) & 0x7ff) * RECORD_BYTES;
 }
 
 u16 tu58_cartridge_device::checksum(int track, int record)
@@ -259,7 +279,7 @@ u16 tu58_cartridge_device::checksum(int track, int record)
 	// record's number on the cartridge (23-089E2 0527)
 	u32 sum = record + track * RECORDS;
 	const u8 *d = &m_data[image_offset(track, record)];
-	for (int i = 0; i < 128; i += 2)
+	for (u32 i = 0; i < RECORD_BYTES; i += 2)
 	{
 		sum += d[i] | (d[i + 1] << 8);
 		if (sum > 0xffff)
@@ -340,12 +360,12 @@ void tu58_cartridge_device::write_record(int track, double pos, const u8 *data, 
 	const s64 rel = s64(pos) - BOT_LEN;
 	if (rel < 0 || rel >= RECORDS * REC_LEN)
 	{
-		LOGWRITE("write outside the records at %.0f, ignored\n", pos);
+		logerror("write outside the records at %.0f, ignored\n", pos);
 		return;
 	}
 	const int record = rel / REC_LEN;
 	const u32 offset = image_offset(track, record);
-	std::copy_n(data, 128, &m_data[offset]);
+	std::copy_n(data, RECORD_BYTES, &m_data[offset]);
 	m_checksum[track * RECORDS + record] = -1;
 	if (checksum(track, record) != sum)
 		m_checksum[track * RECORDS + record] = sum;
@@ -355,7 +375,7 @@ void tu58_cartridge_device::write_record(int track, double pos, const u8 *data, 
 	if (!is_readonly())
 	{
 		fseek(offset, SEEK_SET);
-		fwrite(data, 128);
+		fwrite(data, RECORD_BYTES);
 	}
 }
 
@@ -412,7 +432,7 @@ void tu58_cartridge_device::set_setpoint(double cells_per_s)
 		m_stalled = false;
 		m_v0 = 0.0;
 	}
-	LOGMOTION("%s: setpoint %.1f in/s at %.1f in/s, cell %.1f\n", tag(), m_sp / CELLS_PER_INCH, m_v0 / CELLS_PER_INCH, m_p0);
+	LOGMOTION("setpoint %.1f in/s at %.1f in/s, cell %.1f\n", m_sp / CELLS_PER_INCH, m_v0 / CELLS_PER_INCH, m_p0);
 }
 
 tu58_cartridge_device::event tu58_cartridge_device::next_event()
@@ -502,7 +522,7 @@ void tu58_cartridge_device::arrive(const event &ev)
 	m_p0 = double(ev.pos);
 	if (ev.pos <= 0 || ev.pos >= TRACK_LEN)
 	{
-		LOGMOTION("%s: ran off the %s of the tape\n", tag(), ev.pos ? "end" : "start");
+		LOGMOTION("ran off the %s of the tape\n", ev.pos ? "end" : "start");
 		m_v0 = 0.0;
 		m_stalled = true;
 	}
@@ -512,8 +532,6 @@ void tu58_cartridge_device::arrive(const event &ev)
 //**************************************************************************
 //  CONTROLLER
 //**************************************************************************
-
-namespace {
 
 class dec_tu58_device : public device_t, public device_rs232_port_interface
 {
@@ -526,6 +544,7 @@ public:
 
 protected:
 	virtual void device_start() override ATTR_COLD;
+	virtual void device_post_load() override ATTR_COLD;
 	virtual void device_reset() override ATTR_COLD;
 	virtual void device_reset_after_children() override ATTR_COLD;
 	virtual void device_add_mconfig(machine_config &config) override ATTR_COLD;
@@ -548,18 +567,18 @@ private:
 	tu58_cartridge_device::event m_event;
 	u8 m_pb;
 	u8 m_pc;
-	int m_sid;
-	int m_mark;
-	int m_tmr;
-	int m_tmr_edges;
-	int m_running;
-	int m_so;
-	int m_oe;
+	u8 m_sid;
+	u8 m_mark;
+	u8 m_tmr;
+	u32 m_tmr_edges;
+	u8 m_running;
+	u8 m_so;
+	u8 m_oe;
 
 	// the bit stream from SOD while WRT ENB is high
 	bool m_writing;
-	int m_wr_drive;
-	int m_wr_track;
+	u8 m_wr_drive;
+	u8 m_wr_track;
 	double m_wr_pos;
 	std::vector<std::pair<attotime, int>> m_wr_edges;
 
@@ -575,6 +594,7 @@ private:
 	void tmr_w(int state);
 	void so_w(int state);
 	int sid_r() { return m_sid; }
+	void present_changed(int state) { update_motors(); }
 	void sod_w(int state);
 
 	int selected() const { return BIT(m_pb, 3) ? 0 : 1; }
@@ -713,13 +733,13 @@ u8 dec_tu58_device::pa_r()
 	const int tach = int(std::floor(drive.pos() / tu58_cartridge_device::TACH_CELLS)) & 1;
 
 	return (drive.write_protected() ? 0x01 : 0x00)
-			| (tach << 1)
+			| (tach ? 0x02 : 0x00)
 			| (m_drive[1]->present() ? 0x00 : 0x04)
 			| (m_drive[0]->present() ? 0x00 : 0x08)
 			| (m_running ? 0x00 : 0x10)
-			| (m_oe << 5)
-			| ((m_switches->read() & 0x01) << 6)
-			| (m_mark << 7);
+			| (m_oe ? 0x20 : 0x00)
+			| (BIT(m_switches->read(), 0) ? 0x40 : 0x00)
+			| (m_mark ? 0x80 : 0x00);
 }
 
 void dec_tu58_device::pb_w(u8 data)
@@ -748,7 +768,15 @@ void dec_tu58_device::pb_w(u8 data)
 		m_wr_edges.clear();
 	}
 	else if (BIT(old, 1) && !BIT(data, 1))
+	{
 		finish_write();
+	}
+
+	// erase and reduced write gain are not emulated; say so when asked for
+	if (BIT(old, 5) && !BIT(data, 5))
+		logerror("GAIN REDUCE ignored\n");
+	if (BIT(old, 6) && !BIT(data, 6))
+		logerror("ERASE ENA ignored\n");
 
 	if ((old ^ data) & 0x9d)
 		update_motors();
@@ -836,6 +864,8 @@ TIMER_CALLBACK_MEMBER(dec_tu58_device::run_timeout)
 
 void dec_tu58_device::finish_write()
 {
+	if (!m_writing)
+		return;
 	m_writing = false;
 
 	// decode the ratio encoding: each cell runs from one rising edge to the
@@ -857,7 +887,9 @@ void dec_tu58_device::finish_write()
 			fall = attotime::never;
 		}
 		else if (!state && level)
+		{
 			fall = t;
+		}
 		level = state;
 	}
 	if (!rise.is_never() && !fall.is_never() && period != attotime::zero)
@@ -868,7 +900,7 @@ void dec_tu58_device::finish_write()
 	auto sync = std::find(bits.begin(), bits.end(), 1);
 	if (sync == bits.end() || (bits.end() - sync) < 1 + 1024 + 16)
 	{
-		LOGWRITE("write of %u bits has no complete record, ignored\n", unsigned(bits.size()));
+		logerror("write of %u bits has no complete record, ignored\n", u32(bits.size()));
 		return;
 	}
 	++sync;
@@ -908,6 +940,19 @@ void dec_tu58_device::device_start()
 	save_item(NAME(m_wr_drive));
 	save_item(NAME(m_wr_track));
 	save_item(NAME(m_wr_pos));
+}
+
+// The edges of a write in progress are not saved (a vector that grows
+// during the write can't be registered), so a state loaded mid-write drops
+// the record instead of finishing it from a partial bit stream.
+void dec_tu58_device::device_post_load()
+{
+	if (m_writing)
+	{
+		logerror("state loaded during a write, record dropped\n");
+		m_writing = false;
+	}
+	m_wr_edges.clear();
 }
 
 void dec_tu58_device::device_reset()
@@ -972,8 +1017,11 @@ void dec_tu58_device::device_add_mconfig(machine_config &config)
 	CLOCK(config, m_txclk, 4.9152_MHz_XTAL / 8);
 	m_txclk->signal_handler().set(m_uart, FUNC(ay31015_device::write_tcp));
 
-	TU58_CARTRIDGE(config, m_drive[0]);
-	TU58_CARTRIDGE(config, m_drive[1]);
+	for (auto &drive : m_drive)
+	{
+		TU58_CARTRIDGE(config, drive);
+		drive->present_callback().set(FUNC(dec_tu58_device::present_changed));
+	}
 }
 
 } // anonymous namespace
