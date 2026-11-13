@@ -12,13 +12,10 @@ DEC VIDEO : STATE AS OF JULY 2014
 Code developed with Rainbow-100 hardware in mind (a PC-like machine with a video circuit similar to a VT100 equipped w. AVO)
 Details (termination characters, option hardware, MHFU watchdog) differ when compared to VT.
 
-As of July 2014, the Rainbow video section is more mature than the 'VT100_VIDEO' part (essentially unchanged since 2009).
-List of features not yet ported to VT: line doubler; 48 line mode; soft scroll; intensity / palette, AVO (ext.attributes)
-
-As of November 2026 the VT side has smooth scroll and split screen scrolling
-(per-scan DC012 counters, TM 4.6.3.3 and 4.7.9; Rainbow keeps its own loop),
-interlaced line doubling, and AVO attributes (vt100_avo.cpp).  Still missing
-on VT: the brightness register (brightness_w).  48 lines are Rainbow only.
+The VT side has smooth scroll and split screen scrolling (per-scan DC012
+counters, TM 4.6.3.3 and 4.7.9; Rainbow keeps its own loop), interlaced
+line doubling, AVO attributes (vt100_avo.cpp), the brightness D/A latch
+and the graphics connector's video inputs.  48 lines are Rainbow only.
 
 FIXME: work out the differences and identify common code between VT and Rainbow. Unify different code trees.
 
@@ -66,6 +63,8 @@ FIXME: work out the differences and identify common code between VT and Rainbow.
 #include "vtvideo.h"
 #include "screen.h"
 
+#include <algorithm>
+
 /***************************************************************************
 PARAMETERS
 ***************************************************************************/
@@ -82,6 +81,7 @@ vt100_video_device::vt100_video_device(const machine_config &mconfig, device_typ
 	: device_t(mconfig, type, tag, owner, clock)
 	, device_video_interface(mconfig, *this)
 	, m_graphics_cb(*this)
+	, m_altchar_cb(*this)
 	, m_read_ram(*this, 0)
 	, m_write_vert_freq_intr(*this)
 	, m_write_lba3_lba4(*this)
@@ -119,6 +119,7 @@ void vt100_video_device::device_start()
 
 	screen().register_vblank_callback(vblank_state_delegate(&vt100_video_device::vblank_callback, this));
 	m_graphics_cb.resolve();
+	m_altchar_cb.resolve();
 
 	save_item(NAME(m_lba7));
 	save_item(NAME(m_scroll_latch));
@@ -375,8 +376,9 @@ void vt100_video_device::dc011_w(uint8_t data)
 // D0-D4 drive open collector 7416 inverters (E14) that ground R49-R53 (620,
 // 300, 150, 75, 36 ohms) in parallel with R54 (75 ohms), the collector load
 // of the Direct Drive Video output stage (Q3/Q4).  A set bit lowers the
-// load and so the video swing to the monitor's cathode driver: larger codes
-// are dimmer, 32 levels (TM-003 4.6.12.1).  D5 is INIT H to the STP (the
+// load and so the video swing to the monitor's cathode driver, in 32
+// levels (TM-003 4.6.13); that larger codes are dimmer is inferred from
+// the resistors, which the manual doesn't say.  D5 is INIT H to the STP (the
 // driver's).  The firmware rewrites the latch every vertical reset.  The
 // monitor's brightness pot sets the CRT grid bias, so black stays black.
 // Not modelled: the monitor's own input impedance across the load (not
@@ -690,7 +692,10 @@ void vt100_video_device::draw_scan(bitmap_ind16 &bitmap, int y_preset, int x, ui
 	// modify line since that is how it is stored in rom
 	if (j == 0) j = 15; else j = j - 1;
 
-	line = m_char_rom[(code << 4) + j]; // code * 16
+	if (BIT(code, 7) && !m_altchar_cb.isnull())
+		line = m_altchar_cb(((code & 0x7f) << 4) + j);
+	else
+		line = m_char_rom[(code << 4) + j]; // code * 16
 
 	// underline: the 9th scan takes the character intensity (black when reverse)
 	if (underlined && (i == 8))

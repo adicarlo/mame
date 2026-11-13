@@ -25,11 +25,14 @@ public:
 	// counted from the end of vertical blank: fills 512 dots (nonzero =
 	// lit) and returns 0 for none, 1 for 512 dots at line/662 (10.4 MHz),
 	// 2 for 512 dots at line/800 (12.4 MHz)
-	typedef device_delegate<int (int line, uint8_t *dots)> graphics_delegate;
+	using graphics_delegate = device_delegate<int (int line, uint8_t *dots)>;
+	using altchar_delegate = device_delegate<u8 (offs_t offset)>;
 
 	vt100_video_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock);
 
 	template <typename... T> void set_graphics_callback(T &&... args) { m_graphics_cb.set(std::forward<T>(args)...); }
+	// characters 128-255 from a separate socket (offset = (code - 128) * 16 + scan)
+	template <typename... T> void set_altchar_callback(T &&... args) { m_altchar_cb.set(std::forward<T>(args)...); }
 	auto ram_rd_callback() { return m_read_ram.bind(); }
 	auto vert_freq_intr_wr_callback() { return m_write_vert_freq_intr.bind(); }
 	auto lba3_lba4_wr_callback() { return m_write_lba3_lba4.bind(); }
@@ -65,6 +68,7 @@ protected:
 	virtual void vertical_reset();
 
 	graphics_delegate  m_graphics_cb;
+	altchar_delegate   m_altchar_cb;
 	devcb_read8        m_read_ram;
 	devcb_write_line   m_write_vert_freq_intr;
 	devcb_write8       m_write_lba3_lba4;
@@ -95,7 +99,7 @@ protected:
 	required_device<palette_device> m_palette;
 
 	bool m_notify_vblank = false;
-	int m_last_scroll = 0;
+	u8 m_last_scroll = 0;
 	uint8_t m_brightness = 0; // D/A latch D0-D4
 
 	bool m_linedoubler = false;
