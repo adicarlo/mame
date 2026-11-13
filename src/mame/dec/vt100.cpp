@@ -46,6 +46,7 @@
 #include "machine/i8251.h"
 #include "machine/ins8250.h"
 #include "machine/rstbuf.h"
+#include "vt100_altchar.h"
 #include "vt100_avo.h"
 #include "vt100_kbd.h"
 #include "vt100_stp.h"
@@ -76,7 +77,9 @@ public:
 		m_phosphor(*this, "phosphor"),
 		m_avo(*this, "avo"),
 		m_stp(*this, "stp"),
-		m_localclk(*this, "localclk")
+		m_localclk(*this, "localclk"),
+		m_altchar(*this, "altchar"),
+		m_chargen(*this, "chargen")
 	{
 	}
 
@@ -109,6 +112,8 @@ private:
 	optional_device<vt100_avo_slot_device> m_avo; // VT100 board AVO connector (J1)
 	optional_device<vt100_stp_slot_device> m_stp; // VT100 board Standard Terminal Port (J3)
 	optional_device<clock_device> m_localclk; // LOCAL CLK to the STP
+	required_device<vt100_altchar_slot_device> m_altchar; // alternate character ROM socket (E9; E4 on the VT101/VT102)
+	required_region_ptr<u8> m_chargen;
 	u8 m_options = 0; // set by each model's machine config
 	bool m_even_field_high = false; // VT101/VT102 board wires EVEN FIELD L to +5 V
 
@@ -353,6 +358,11 @@ void vt100_state::machine_start()
 
 	save_item(NAME(m_modem));
 
+	// the alternate character ROM socket is the character generator's top half
+	for (offs_t i = 0; i < 0x800; i++)
+		m_chargen[0x800 + i] = m_altchar->read(i);
+	subdevice<gfxdecode_device>("gfxdecode")->gfx(0)->mark_all_dirty();
+
 	// LOCAL CLK only matters to an STP option; don't run it for nothing
 	if (m_localclk && !m_stp->present())
 		m_localclk->set_clock(0);
@@ -447,6 +457,7 @@ void vt100_state::vt100(machine_config &config)
 	VT100_VIDEO(config, m_crtc, XTAL(24'073'400));
 	m_crtc->set_screen("screen");
 	m_crtc->set_chargen("chargen");
+	VT100_ALTCHAR_SLOT(config, m_altchar, vt100_altchar_options, nullptr);
 	m_crtc->ram_rd_callback().set(FUNC(vt100_state::video_ram_r));
 	m_crtc->vert_freq_intr_wr_callback().set(m_rstbuf, FUNC(rst_pos_buffer_device::rst4_w));
 	m_crtc->lba3_lba4_wr_callback().set(FUNC(vt100_state::uart_clock_w));
@@ -733,9 +744,8 @@ ROM_START( vt100 ) // This is from the schematics at http://www.bitsavers.org/pd
 	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
 	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e9", 0x0800, 0x0800, NO_DUMP) // optional ?word processing? alternate character set ROM
 ROM_END
 
 #if 0
@@ -755,9 +765,8 @@ ROM_START( vt100wp ) // This is from the schematics at http://www.bitsavers.org/
 	ROM_LOAD( "23-186e2-00.bin", 0x1000, 0x0800, NO_DUMP)
 	ROM_LOAD( "23-187e2-00.bin", 0x1800, 0x0800, NO_DUMP)
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e9", 0x0800, 0x0800, NO_DUMP) // REQUIRED foreign language alternate character set ROM
 ROM_END
 
 ROM_START( vt132 ) // This is from anecdotal evidence and vt100.net, as the vt132 schematics are not scanned
@@ -793,9 +802,8 @@ ROM_START( vt132 ) // This is from anecdotal evidence and vt100.net, as the vt13
 	ROM_LOAD( "23-238e2-00.e13", 0x1000, 0x0800, NO_DUMP)
 	ROM_LOAD( "23-239e2-00.e8", 0x1800, 0x0800, NO_DUMP)
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e9", 0x0800, 0x0800, NO_DUMP) // optional (comes default with some models) alternate character set ROM
 ROM_END
 #endif
 
@@ -815,9 +823,8 @@ ROM_START( vt100ac ) // This is from the VT180 technical manual at http://www.bi
 
 	// printer port ROM 23-029e4: see vt100_stp.cpp
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e9", 0x0800, 0x0800, NO_DUMP) // optional ?word processing? alternate character set ROM
 ROM_END
 
 #if 0
@@ -832,9 +839,8 @@ ROM_START( vt103 ) // This is from the schematics at http://www.bitsavers.org/pd
 	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
 	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e9", 0x0800, 0x0800, NO_DUMP) // optional (comes default with some models) alternate character set ROM
 
 	ROM_REGION(0x0800, "tapecpu", 0) // ROM for the 8085 CPU in the integrated serial tu58-xa drive
 	ROM_LOAD( "23-089e2.e1", 0x0000, 0x0800, CRC(8614dd4c) SHA1(1b554e6c98bddfc6bc48d81c990deea43cf9df7f)) // Label: "23-089E2 // P8316E - AMD // 35227 8008NPP"
@@ -854,9 +860,8 @@ ROM_START( vt105 ) // This is from anecdotal evidence and vt100.net, as the vt10
 	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
 	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e9", 0x0800, 0x0800, NO_DUMP) // optional (comes default with some models) alternate character set ROM
 ROM_END
 
 #if 0
@@ -870,9 +875,8 @@ ROM_START( vt110 )
 	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
 	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e9", 0x0800, 0x0800, NO_DUMP) // optional (comes default with some models) alternate character set ROM
 //DECDataway board ROMs go here!
 ROM_END
 
@@ -887,9 +891,8 @@ ROM_START( vt125 ) // This is from bitsavers and vt100.net, as the vt125 schemat
 	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
 	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e9", 0x0800, 0x0800, NO_DUMP) // optional (comes default with some models) alternate character set ROM
 
 	// "GPO" aka vt125 "mono board" ROMs and PROMs
 	ROM_REGION(0x10000, "monocpu", ROMREGION_ERASEFF) // ROMs for the 8085 sub-CPU
@@ -922,9 +925,8 @@ ROM_START( vt101 ) // p/n 5414185-00 'unupgradable/low cost' vt101/vt102/vt131 m
 	// E67 socket is empty/unpopulated on vt101
 	// DIP40 at E74 in the lower right corner of MB in vt101 (WD8250 UART) is absent
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e3", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e4", 0x0800, 0x0800, NO_DUMP) // optional (comes default with some models) alternate character set ROM
 ROM_END
 
 
@@ -942,9 +944,8 @@ ROM_START( vt102 ) // p/n 5414185-01 'unupgradable/low cost' vt101/vt102/vt131 m
 	ROMX_LOAD( "23-225e4-00.e69", 0x8000, 0x2000, CRC(3567c760) SHA1(672473162e9c92cd237e4dbf92c2700a31c5374b), ROM_BIOS(1)) // shared with vt131
 	//e67 socket is empty on vt102 but populated on vt131 below
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e3", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e4", 0x0800, 0x0800, NO_DUMP) // optional (comes default with some models) alternate character set ROM
 ROM_END
 
 ROM_START( vt131 ) // p/n 5414185-01 'unupgradable/low cost' vt101/vt131 mainboard with vt132-style block serial mode
@@ -961,9 +962,8 @@ ROM_START( vt131 ) // p/n 5414185-01 'unupgradable/low cost' vt101/vt131 mainboa
 	ROMX_LOAD( "23-225e4-00.e69", 0x8000, 0x2000, CRC(3567c760) SHA1(672473162e9c92cd237e4dbf92c2700a31c5374b), ROM_BIOS(1)) // shared with vt102
 	ROM_LOAD( "23-280e2-00.e67", 0xA000, 0x0800, CRC(71b4172e) SHA1(5a82c7dc313bb92b9829eb8350840e072825a797)) // called "VT131 ROM" in the vt101 quick reference guide; pins 20, 18 and 21 are /CE /CE2 and /CE3 on this mask ROM
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e3", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e4", 0x0800, 0x0800, NO_DUMP) // optional (comes default with some models) alternate character set ROM
 ROM_END
 
 ROM_START( vt180 )
@@ -975,9 +975,8 @@ ROM_START( vt180 )
 	ROM_LOAD( "23-033e2-00.e45", 0x1000, 0x0800, CRC(384dac0a) SHA1(22aaf5ab5f9555a61ec43f91d4dea3029f613e64))
 	ROM_LOAD( "23-034e2-00.e40", 0x1800, 0x0800, CRC(4643184d) SHA1(27e6c19d9932bf13fdb70305ef4d806e90d60833))
 
-	ROM_REGION(0x1000, "chargen", ROMREGION_ERASEFF) // empty alternate ROM socket reads high: white cells (TM-003 6.2.4)
+	ROM_REGION(0x1000, "chargen", 0) // 800-FFF: the alternate character ROM socket (altchar)
 	ROM_LOAD( "23-018e2-00.e4", 0x0000, 0x0800, CRC(6958458b) SHA1(103429674fc01c215bbc2c91962ae99231f8ae53))
-	ROM_LOAD( "23-094e2-00.e9", 0x0800, 0x0800, NO_DUMP) // optional (comes default with some models) alternate character set ROM
 ROM_END
 
 } // anonymous namespace
