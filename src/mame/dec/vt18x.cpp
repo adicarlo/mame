@@ -134,6 +134,7 @@ public:
 		, m_comm(*this, "comm")
 		, m_printer(*this, "printer")
 		, m_leds(*this, "vt18x_led%u", 1U)
+		, m_e22(*this, "E22")
 	{
 	}
 
@@ -145,6 +146,10 @@ protected:
 	virtual void device_reset_after_children() override ATTR_COLD;
 	virtual void device_add_mconfig(machine_config &config) override ATTR_COLD;
 	virtual const tiny_rom_entry *device_rom_region() const override ATTR_COLD;
+	virtual ioport_constructor device_input_ports() const override ATTR_COLD;
+
+public:
+	DECLARE_INPUT_CHANGED_MEMBER(e22_changed);
 
 private:
 	static void floppy_formats(format_registration &fr);
@@ -173,6 +178,9 @@ private:
 	void prt_rxd_update();
 	void com_rxd_update();
 	void com_clocks_update();
+	void comm_txd_update();
+	void comm_rts_update();
+	void comm_spds_update();
 
 	required_device<z80_device> m_cpu;
 	required_region_ptr<u8> m_rom;
@@ -190,6 +198,7 @@ private:
 	required_device<rs232_port_device> m_comm;
 	required_device<rs232_port_device> m_printer;
 	output_finder<4> m_leds;
+	required_ioport m_e22;
 
 	emu_timer *m_rtc_timer;
 
@@ -209,6 +218,7 @@ private:
 	// inputs to the receive side, for the loopback
 	int m_tc_txd, m_line_rxd, m_comm_rxd, m_printer_rxd;
 	int m_con_txd, m_gen_txd, m_prt_txd, m_com_txd;
+	int m_com_rts;
 	int m_tc_tclk, m_tc_rclk;
 };
 
@@ -222,6 +232,44 @@ ROM_END
 const tiny_rom_entry *vt100_stp_vt18x_device::device_rom_region() const
 {
 	return ROM_NAME(vt18x);
+}
+
+// E22, standard settings from Table 2-1
+INPUT_PORTS_START( vt18x )
+	PORT_START("E22")
+	PORT_DIPNAME(0x001, 0x001, "RTS (J1 pin 4)") PORT_DIPLOCATION("E22:1") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(vt100_stp_vt18x_device::e22_changed), 0)
+	PORT_DIPSETTING(    0x000, DEF_STR(Off))
+	PORT_DIPSETTING(    0x001, DEF_STR(On))
+	PORT_DIPNAME(0x002, 0x002, "CTS (J1 pin 5)") PORT_DIPLOCATION("E22:2")
+	PORT_DIPSETTING(    0x000, DEF_STR(Off))
+	PORT_DIPSETTING(    0x002, DEF_STR(On))
+	PORT_DIPNAME(0x004, 0x000, "Secondary CTS (J1 pin 13)") PORT_DIPLOCATION("E22:3")
+	PORT_DIPSETTING(    0x000, DEF_STR(Off))
+	PORT_DIPSETTING(    0x004, DEF_STR(On))
+	PORT_DIPNAME(0x008, 0x008, "Speed indicator (J1 pin 12)") PORT_DIPLOCATION("E22:4")
+	PORT_DIPSETTING(    0x000, DEF_STR(Off))
+	PORT_DIPSETTING(    0x008, DEF_STR(On))
+	PORT_DIPNAME(0x010, 0x010, "Secondary RTS (J1 pin 11)") PORT_DIPLOCATION("E22:5")
+	PORT_DIPSETTING(    0x000, DEF_STR(Off))
+	PORT_DIPSETTING(    0x010, DEF_STR(On))
+	PORT_DIPNAME(0x020, 0x020, "TXD (J1 pin 2)") PORT_DIPLOCATION("E22:6") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(vt100_stp_vt18x_device::e22_changed), 0)
+	PORT_DIPSETTING(    0x000, DEF_STR(Off))
+	PORT_DIPSETTING(    0x020, DEF_STR(On))
+	PORT_DIPNAME(0x040, 0x000, "Secondary TXD (J1 pin 14)") PORT_DIPLOCATION("E22:7")
+	PORT_DIPSETTING(    0x000, DEF_STR(Off))
+	PORT_DIPSETTING(    0x040, DEF_STR(On))
+	PORT_DIPNAME(0x080, 0x080, "Secondary RTS (J1 pin 19)") PORT_DIPLOCATION("E22:8")
+	PORT_DIPSETTING(    0x000, DEF_STR(Off))
+	PORT_DIPSETTING(    0x080, DEF_STR(On))
+	PORT_DIPUNUSED_DIPLOC(0x100, 0x000, "E22:9")
+	PORT_DIPNAME(0x200, 0x000, "Speed select (J1 pin 23)") PORT_DIPLOCATION("E22:10") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(vt100_stp_vt18x_device::e22_changed), 0)
+	PORT_DIPSETTING(    0x000, DEF_STR(Off))
+	PORT_DIPSETTING(    0x200, DEF_STR(On))
+INPUT_PORTS_END
+
+ioport_constructor vt100_stp_vt18x_device::device_input_ports() const
+{
+	return INPUT_PORTS_NAME(vt18x);
 }
 
 
@@ -286,8 +334,8 @@ u8 vt100_stp_vt18x_device::status_r()
 		| (BIT(m_speed, 6) ? 0x02 : 0x00)
 		| (BIT(m_speed, 7) ? 0x04 : 0x00)
 		| (m_comm->ri_r() ? 0x00 : 0x08)
-		| (m_comm->cts_r() ? 0x00 : 0x10)
-		| (m_comm->si_r() ? 0x00 : 0x20)
+		| ((BIT(m_e22->read(), 1) && !m_comm->cts_r()) ? 0x10 : 0x00)
+		| ((BIT(m_e22->read(), 3) && !m_comm->si_r()) ? 0x20 : 0x00)
 		| (m_comm->dcd_r() ? 0x00 : 0x40)
 		| (m_power_init ? 0x80 : 0x00);
 }
@@ -310,6 +358,36 @@ void vt100_stp_vt18x_device::speed_w(u8 data)
 	m_speed = data;
 	m_prt_clk->set_unscaled_clock(rates[data & 7] * 16);
 	m_gen_clk->set_unscaled_clock(rates[(data >> 3) & 7] * 16);
+	comm_spds_update();
+}
+
+// E22, the communication switches (EK-VT18X-IN-002 Table 2-1, p.19): each
+// connects one signal between the card and J1.  Open, a line the card drives
+// is left off (mark) at J1, and one it reads is seen off -- inferred, as an
+// open EIA receiver input reads mark.  Switches 3, 5, 7 and 8 carry the
+// secondary channel (J1 pins 13, 11, 14, 19), which the RS-232 port doesn't
+// have; 9 is unused.
+void vt100_stp_vt18x_device::comm_txd_update()
+{
+	m_comm->write_txd(BIT(m_e22->read(), 5) ? m_com_txd : 1);
+}
+
+void vt100_stp_vt18x_device::comm_rts_update()
+{
+	m_comm->write_rts(BIT(m_e22->read(), 0) ? m_com_rts : 1);
+}
+
+// port 90 bit 7 set = speed select on (polarity inferred)
+void vt100_stp_vt18x_device::comm_spds_update()
+{
+	m_comm->write_spds((BIT(m_e22->read(), 9) && BIT(m_speed, 7)) ? 0 : 1);
+}
+
+INPUT_CHANGED_MEMBER(vt100_stp_vt18x_device::e22_changed)
+{
+	comm_txd_update();
+	comm_rts_update();
+	comm_spds_update();
 }
 
 void vt100_stp_vt18x_device::diag_w(u8 data)
@@ -499,6 +577,7 @@ void vt100_stp_vt18x_device::device_start()
 	m_settled = false;
 	m_tc_txd = m_line_rxd = m_comm_rxd = m_printer_rxd = 1;
 	m_con_txd = m_gen_txd = m_prt_txd = m_com_txd = 1;
+	m_com_rts = 1;
 	m_tc_tclk = m_tc_rclk = 1;
 
 	save_item(NAME(m_drive));
@@ -520,6 +599,7 @@ void vt100_stp_vt18x_device::device_start()
 	save_item(NAME(m_gen_txd));
 	save_item(NAME(m_prt_txd));
 	save_item(NAME(m_com_txd));
+	save_item(NAME(m_com_rts));
 	save_item(NAME(m_tc_tclk));
 	save_item(NAME(m_tc_rclk));
 
@@ -600,9 +680,9 @@ void vt100_stp_vt18x_device::device_add_mconfig(machine_config &config)
 	m_gen->rxrdy_handler().set(m_int, FUNC(input_merger_device::in_w<2>));
 
 	I8251(config, m_com, 2_MHz_XTAL);
-	m_com->txd_handler().set([this] (int state) { m_com_txd = state; m_comm->write_txd(state); com_rxd_update(); });
+	m_com->txd_handler().set([this] (int state) { m_com_txd = state; comm_txd_update(); com_rxd_update(); });
 	m_com->dtr_handler().set(m_comm, FUNC(rs232_port_device::write_dtr));
-	m_com->rts_handler().set(m_comm, FUNC(rs232_port_device::write_rts));
+	m_com->rts_handler().set([this] (int state) { m_com_rts = state; comm_rts_update(); });
 	m_com->rxrdy_handler().set(m_int, FUNC(input_merger_device::in_w<3>));
 
 	CLOCK(config, m_prt_clk, 75 * 16);
