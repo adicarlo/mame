@@ -543,17 +543,6 @@ void i8251_device::device_reset()
 
 void i8251_device::command_w(uint8_t data)
 {
-	// An internal reset (IR) puts the device into the "Idle" state, as the
-	// RESET pin does, until new control words are written (8251A data
-	// sheet, RESET): the other bits of the same command don't take effect.
-	// Firmware that writes 4E three times to reset from any state relies on
-	// this, or 4E's SBRK would hold TxD at break.
-	if (BIT(data, 6))
-		data = 0x40;
-
-	/* command */
-	m_command = data;
-
 	LOG("I8251: Command byte: %02x\n", data);
 	LOGCOM(" Tx enable: %d\n", data & 0x01 ? 1 : 0); // bit 0: 0 = transmit disable 1 = transmit enable
 	LOGCOM(" DTR      : %d\n", data & 0x02 ? 1 : 0); // bit 1: 0 = /DTR set to 1    1 = /DTR set to 0
@@ -564,9 +553,6 @@ void i8251_device::command_w(uint8_t data)
 	LOGCOM(" Reset    : %d\n", data & 0x40 ? 1 : 0); // bit 6: 0 = normal operation 1 = internal reset
 	LOGCOM(" Hunt mode: %d\n", data & 0x80 ? 1 : 0); // bit 7: 0 = normal operation 1 = hunt mode
 
-	m_rts_handler(!BIT(data, 5));
-	m_dtr_handler(!BIT(data, 1));
-
 	if (BIT(data, 4))
 	{
 		LOGSTAT("status errors are reset\n");
@@ -575,11 +561,23 @@ void i8251_device::command_w(uint8_t data)
 
 	if (BIT(data, 6))
 	{
-		// datasheet says "returns to mode format", not
-		// completely resets the chip.  behavior of DEC Rainbow
-		// backs this up.
+		// Internal reset returns the device to the mode format, and the 8251A
+		// data sheet says it puts the device in the "Idle" state (RESET pin
+		// description).  It stops short of a full reset (device_reset): the
+		// DEC Rainbow's behaviour backs that up.  That the command's other bits
+		// then have no effect is inferred, since the data sheet only shows a
+		// bare 0x40; ER above still clears the error flags.
+		// Without this, a third 0x4e written to reset the device arrives as a
+		// command, and its SBRK holds TxD at break.
 		m_flags = I8251_NEXT_MODE;
+		data = 0x40;
 	}
+
+	/* command */
+	m_command = data;
+
+	m_rts_handler(!BIT(data, 5));
+	m_dtr_handler(!BIT(data, 1));
 
 	// Hunt mode
 	m_hunt_on = false;
