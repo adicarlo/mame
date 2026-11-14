@@ -176,6 +176,7 @@ public:
 		m_crtc(*this, "crtc"),
 		m_speaker(*this, "beeper"),
 		m_uart(*this, "i8251"),
+		m_rs232(*this, RS232_TAG),
 
 		m_capsshift(*this, "CAPSSHIFT"),
 		m_dipsw(*this, "SWITCHES"),
@@ -198,6 +199,7 @@ public:
 
 private:
 	virtual void machine_start() override ATTR_COLD;
+	virtual void machine_reset() override ATTR_COLD;
 	virtual void video_start() override ATTR_COLD;
 
 	void vk100_mem(address_map &map) ATTR_COLD;
@@ -220,7 +222,12 @@ private:
 	void crtc_vsync(int state);
 	void i8251_rxrdy_int(int state);
 	void i8251_txrdy_int(int state);
-	[[maybe_unused]] void i8251_rts(int state);
+	void i8251_txd(int state) { m_txd = state; serial_route(); }
+	void i8251_rts(int state) { m_rts = state; serial_route(); }
+	void rs232_rxd(int state) { m_rs232_rxd = state; serial_route(); }
+	void rs232_cts(int state) { m_rs232_cts = state; serial_route(); }
+	void rs232_dsr(int state) { m_ADSR = state; }
+	void serial_route();
 	uint8_t vram_read();
 	uint8_t vram_attr_read();
 	MC6845_UPDATE_ROW(crtc_update_row);
@@ -230,6 +237,7 @@ private:
 	required_device<mc6845_device> m_crtc;
 	required_device<beep_device> m_speaker;
 	required_device<i8251_device> m_uart;
+	required_device<rs232_port_device> m_rs232;
 
 	required_ioport m_capsshift;
 	required_ioport m_dipsw;
@@ -254,6 +262,7 @@ private:
 	uint8_t* m_vector;
 	uint8_t* m_ras_erase;
 	uint8_t m_dir_a6; // latched a6 of dir rom
+	uint8_t m_vgWrite; // dir rom D4 from the last step: write in this cycle
 	uint8_t m_cout; // carry out from vgERR adder
 	uint8_t m_vsync; // vsync pin of crtc
 	uint16_t m_vgX; // 12 bit X value for vector draw position
@@ -274,6 +283,8 @@ private:
 	uint8_t m_vgGO; // activated on next SYNC pulse after EXEC
 	uint8_t m_ACTS;
 	uint8_t m_ADSR;
+	uint8_t m_txd, m_rts;       // 8251 outputs
+	uint8_t m_rs232_rxd, m_rs232_cts;
 	required_ioport_array<16> m_col_array;
 };
 
@@ -370,67 +381,79 @@ void vk100_state::vram_write(uint8_t data)
  *            \--------- UNUSED, always 0
  * The VT125 prom @ E41 is literally identical to this, the same exact part: 23-059B1
  */
+// One memory cycle of the vector generator.  A vector is DU+1 cycles.  Each
+// one adds ERR + DVM + 1 for C OUT, reads the nybble at X,Y, writes it back
+// through the pattern ROM if the direction PROM enabled the write at the
+// step before, and (vectors only, from the second cycle on) shifts the
+// pattern.  Then, except in the last cycle, ERR takes the sum (plus DU on a
+// borrow) and the direction PROM, addressed by its own D5 fed back, Y0,
+// C OUT and DIR, steps X and Y: D0 /ENA X, D1 /ENA Y (active low), D3 X
+// down, D2 Y down, D4 enables the next cycle's write.  DIR 0-7 are fixed
+// directions, 8-F octants that step diagonally on a borrow.
+//
+// Inferred from the sequencer and sync PROMs (23-058B1, 23-297A1) and
+// checked against the VT125's vector generator self-test, which uses the
+// same direction PROM; see dec/vt125_mono.cpp.
 TIMER_CALLBACK_MEMBER(vk100_state::execute_vg)
 {
-	m_cout = 1; // hack for now
-	uint8_t dirbyte = m_dir[(m_dir_a6<<6)|((m_vgY&1)<<5)|(m_cout<<4)|VG_DIR];
-#ifdef DEBUG_VG_STATE
-	static const char *const vg_functions[] = { "Move", "Dot", "Vector", "Erase" };
-	fprintf(stderr, "VGMODE: %s; DIR: A:%02x; D:%02x; X: %03X; Y: %03X; DownCount: %02X\n", vg_functions[m_VG_MODE], ((m_dir_a6<<6)|((m_vgY&1)<<5)|(m_cout<<4)|VG_DIR), dirbyte, m_vgX, m_vgY, m_vgDownCount);
-#endif
-	m_dir_a6 = m_vgGO?((dirbyte&0x20)>>5):1;
-	if (dirbyte&2) // ena_x is active
+	uint8_t const thisNyb = vram_read();
+	auto const pattern_write = [this, thisNyb] ()
 	{
-		if (dirbyte&0x80) m_vgX--;
-		else m_vgX++;
-	}
-	if (dirbyte&1) // ena_y is active
-	{
-		if (dirbyte&0x40) m_vgY--;
-		else m_vgY++;
-	}
-	if (dirbyte&0x10) m_vgDownCount--; // decrement the down counter
-	uint8_t thisNyb = vram_read(); // read in the nybble
-	// pattern rom addressing is a complex mess. see the pattern rom def later in this file.
-	uint8_t newNyb = m_pattern[((m_vgPAT&m_vgPAT_Mask)?0x200:0)|((VG_WOPS&7)<<6)|((m_vgX&3)<<4)|thisNyb]; // calculate new nybble based on pattern rom
-	// finally write the block back to ram depending on the VG_MODE (sort of a hack until we get the vector and sync and dir roms all hooked up)
-	// but only do it if the direction rom said so!
+		vram_write(m_pattern[((m_vgPAT & m_vgPAT_Mask) ? 0x200 : 0) | ((VG_WOPS & 7) << 6) | ((m_vgX & 3) << 4) | thisNyb]);
+	};
+
 	switch (m_VG_MODE)
 	{
-		case 0: // move; adjusts the x and y but doesn't write anything. do nothing
-			break;
-		case 1: // dot: only write the LAST pixel in the chain? TODO: some fallthrough magic here?
-			if ((m_vgDownCount) == 0x00)
-			{
-				if (dirbyte&0x10) vram_write(newNyb); // write out the modified nybble
-			}
-			break;
-		case 2: // vec: draw the vector
-				if (dirbyte&0x10) vram_write(newNyb); // write out the modified nybble
-			break;
-		case 3: // er: erase: special case here: wipe the entire screen (except for color/attrib?) and then set done.
-			for (int i = 0; i < 0x8000; i++)
-			{
-				if (!(i&1)) // avoid stomping attribute
-					m_vram[i] = m_vram[i]&0xF0;
-				else // (i&1)
-					m_vram[i] = 0;
-			}
-			m_vgGO = 0; // done
-			break;
+	case 1: // dot: the pixel at X,Y, once
+		pattern_write();
+		m_vgGO = 0;
+		return;
+
+	case 3: // erase: wipe the entire screen (except for color/attrib?) and then set done
+		for (int i = 0; i < 0x8000; i++)
+		{
+			if (!(i & 1)) // avoid stomping attribute
+				m_vram[i] = m_vram[i] & 0xf0;
+			else
+				m_vram[i] = 0;
+		}
+		m_vgGO = 0;
+		return;
 	}
-	if ((m_vgDownCount) == 0x00) m_vgGO = 0; // check if the down counter hit terminal count (0), if so we're done.
-	if (((++m_vgPMUL_Count)&0xF)==0) // if pattern multiplier counter overflowed
+
+	unsigned const sum = (m_vgERR & 0xff) + VG_DVM + 1;
+	m_cout = BIT(sum, 8);
+	bool const first = (m_vgDownCount == VG_DU);
+	if (m_VG_MODE == 2 && m_vgWrite)
+		pattern_write();
+	if (m_VG_MODE == 2 && !first && ((++m_vgPMUL_Count) & 0xf) == 0) // pattern multiplier counter overflowed
 	{
 		m_vgPMUL_Count = m_vgPMUL; // reload counter
 		m_vgPAT_Mask >>= 1; // shift the mask
 		if (m_vgPAT_Mask == 0) m_vgPAT_Mask = 0x80; // reset mask if it hits 0
 	}
-	if (m_vgGO)
+	if (m_vgDownCount == 0)
 	{
-		// /3/12/2 is correct. the sync counter is clocked by the dot clock, despite the error on figure 5-21
-		m_vg_timer->adjust(attotime::from_hz(XTAL(45'619'200)/3/12/2));
+		m_vgGO = 0;
+		return;
 	}
+
+	m_vgERR = (sum + (m_cout ? 0 : VG_DU)) & 0xff;
+	uint8_t const dirbyte = m_dir[(m_dir_a6 << 6) | ((m_vgY & 1) << 5) | (m_cout << 4) | (VG_DIR & 0x0f)];
+#ifdef DEBUG_VG_STATE
+	static const char *const vg_functions[] = { "Move", "Dot", "Vector", "Erase" };
+	fprintf(stderr, "VGMODE: %s; DIR: D:%02x; X: %03X; Y: %03X; DownCount: %02X\n", vg_functions[m_VG_MODE], dirbyte, m_vgX, m_vgY, m_vgDownCount);
+#endif
+	if (!BIT(dirbyte, 0))
+		m_vgX = (m_vgX + (BIT(dirbyte, 3) ? -1 : 1)) & 0xfff;
+	if (!BIT(dirbyte, 1))
+		m_vgY = (m_vgY + (BIT(dirbyte, 2) ? -1 : 1)) & 0xfff;
+	m_vgWrite = BIT(dirbyte, 4);
+	m_dir_a6 = BIT(dirbyte, 5);
+	m_vgDownCount--;
+
+	// /3/12/2 is correct. the sync counter is clocked by the dot clock, despite the error on figure 5-21
+	m_vg_timer->adjust(attotime::from_hz(XTAL(45'619'200)/3/12/2));
 }
 
 /* ports 0x40 and 0x41: load low and high bytes of vector gen X register */
@@ -481,6 +504,7 @@ void vk100_state::vgERR(uint8_t data)
 void vk100_state::vgSOPS(uint8_t data)
 {
 	m_vgSOPS = data;
+	serial_route();
 #ifdef VG40_VERBOSE
 	static const char *const serialDest[4] = { "EIA232", "20ma", "Hardcopy", "Loopback/test" };
 	logerror("VG: 0x45: SOPS Reg loaded with %02X: Background KGRB: %d%d%d%d, Blink: %d, Serial select: %s, Reverse BG/FG: %d\n", m_vgSOPS, (m_vgSOPS>>7)&1, (m_vgSOPS>>6)&1, (m_vgSOPS>>5)&1, (m_vgSOPS>>4)&1, (m_vgSOPS>>3)&1, serialDest[(m_vgSOPS>>1)&3], m_vgSOPS&1);
@@ -553,6 +577,8 @@ void vk100_state::vgEX(offs_t offset, uint8_t data)
 	m_vgDownCount = VG_DU; // set down counter to length of major vector
 	m_VG_MODE = offset&3;
 	m_vgGO = 1;
+	m_vgWrite = 0;
+	m_dir_a6 = 1;
 	m_vg_timer->adjust(attotime::zero);
 }
 
@@ -936,6 +962,7 @@ void vk100_state::machine_start()
 	m_l2_led = 1;
 	m_vsync = 0;
 	m_dir_a6 = 1;
+	m_vgWrite = 0;
 	m_cout = 0;
 	m_vgX = 0;
 	m_vgY = 0;
@@ -954,12 +981,20 @@ void vk100_state::machine_start()
 	m_vgGO = 0;
 	m_ACTS = 1;
 	m_ADSR = 1;
+	m_txd = m_rts = 1;
+	m_rs232_rxd = m_rs232_cts = 1;
 
 	m_vg_timer = timer_alloc(FUNC(vk100_state::execute_vg), this);
 	// TODO: figure out the best way to bring up the i8251 timers
 	//m_i8251_rx_timer = timer_alloc(FUNC(vk100_state::i8251_rx_tick), this);
 	//m_i8251_tx_timer = timer_alloc(FUNC(vk100_state::i8251_tx_tick), this);
 	//m_i8251_sync_timer = timer_alloc(FUNC(vk100_state::i8251_sync), this);
+}
+
+void vk100_state::machine_reset()
+{
+	// the 8251's CTS is grounded in every SOPS routing (vgSOPS table)
+	m_uart->write_cts(0);
 }
 
 void vk100_state::crtc_vsync(int state)
@@ -978,11 +1013,17 @@ void vk100_state::i8251_txrdy_int(int state)
 	m_maincpu->set_input_line(I8085_RST55_LINE, state?ASSERT_LINE:CLEAR_LINE);
 }
 
-void vk100_state::i8251_rts(int state)
+// SOPS SL1/SL0 route the 8251 (see the table at vgSOPS).  Only the EIA
+// port J6 is emulated: on 20 mA (J1) and hardcopy (J7) the 8251 receives
+// a marking line, and on the hardcopy port ACTS reads J7 /DCTS, which is
+// taken as off.
+void vk100_state::serial_route()
 {
-	logerror("callback: RTS state changed to %d\n", state);
-	// TODO: only change this during loopback mode!
-	m_ACTS = state;
+	unsigned const sl = BIT(m_vgSOPS, 1, 2);
+	m_uart->write_rxd((sl == 3) ? m_txd : (sl == 0) ? m_rs232_rxd : 1);
+	m_rs232->write_txd((sl == 0) ? m_txd : 1);
+	m_rs232->write_rts((sl == 0) ? m_rts : 1);
+	m_ACTS = BIT(sl, 0) ? m_rts : (sl == 0) ? m_rs232_cts : 1;
 }
 
 void vk100_state::video_start()
@@ -1046,15 +1087,16 @@ void vk100_state::vk100(machine_config &config)
 
 	/* i8251 uart */
 	I8251(config, m_uart);
-	m_uart->txd_handler().set(RS232_TAG, FUNC(rs232_port_device::write_txd));
+	m_uart->txd_handler().set(FUNC(vk100_state::i8251_txd));
 	m_uart->dtr_handler().set(RS232_TAG, FUNC(rs232_port_device::write_dtr));
-	m_uart->rts_handler().set(RS232_TAG, FUNC(rs232_port_device::write_rts));
+	m_uart->rts_handler().set(FUNC(vk100_state::i8251_rts));
 	m_uart->rxrdy_handler().set(FUNC(vk100_state::i8251_rxrdy_int));
 	m_uart->txrdy_handler().set(FUNC(vk100_state::i8251_txrdy_int));
 
-	rs232_port_device &rs232(RS232_PORT(config, RS232_TAG, default_rs232_devices, nullptr));
-	rs232.rxd_handler().set(m_uart, FUNC(i8251_device::write_rxd));
-	rs232.dsr_handler().set(m_uart, FUNC(i8251_device::write_dsr));
+	rs232_port_device &rs232(RS232_PORT(config, m_rs232, default_rs232_devices, nullptr));
+	rs232.rxd_handler().set(FUNC(vk100_state::rs232_rxd));
+	rs232.cts_handler().set(FUNC(vk100_state::rs232_cts));
+	rs232.dsr_handler().set(FUNC(vk100_state::rs232_dsr));
 
 	com8116_device &dbrg(COM8116(config, COM5016T_TAG, 5.0688_MHz_XTAL));
 	dbrg.fr_handler().set(m_uart, FUNC(i8251_device::write_rxc));
