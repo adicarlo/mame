@@ -13,7 +13,6 @@
                 the tests are described on page 6-5 thru 6-8 of the tech reference
                 * hook up the bresenham DU/DVM/ERR stuff, currently only simple directional vectors work
                 * hook up the vector and sync proms to the sync counter
-                * figure out how the erase prom actually works at a hardware level
                 * redump the vector prom, the first two bytes look bad
               * figure out the correct meaning of systat b register - needed for communications selftest
               * hook up smc com5016t baud generator to i8251 rx and tx clocks - begun
@@ -220,6 +219,7 @@ private:
 
 	TIMER_CALLBACK_MEMBER(execute_vg);
 	void crtc_vsync(int state);
+	void crtc_de(int state);
 	void i8251_rxrdy_int(int state);
 	void i8251_txrdy_int(int state);
 	void i8251_txd(int state) { m_txd = state; serial_route(); }
@@ -228,6 +228,11 @@ private:
 	void rs232_cts(int state) { m_rs232_cts = state; serial_route(); }
 	void rs232_dsr(int state) { m_ADSR = state; }
 	void serial_route();
+	// X' (through the translate PROM) for bits 9-2, X for bits 1-0
+	uint16_t x_final() const { return m_trans[(m_vgX & 0x3fc) >> 2] << 2 | (m_vgX & 3); }
+	// the 16-bit VRAM word the 6845 refreshes (TM page 5-23): a13-a0 are
+	// MA11-MA6, RA1, RA0, MA5-MA0
+	static uint16_t crtc_word(uint16_t ma, uint8_t ra) { return ((ma & 0xfc0) << 2) | ((ra & 3) << 6) | (ma & 0x3f); }
 	uint8_t vram_read();
 	uint8_t vram_attr_read();
 	MC6845_UPDATE_ROW(crtc_update_row);
@@ -312,8 +317,7 @@ private:
 // returns one nybble from vram array based on X and Y regs
 uint8_t vk100_state::vram_read()
 {
-	// XFinal is (X'&0x3FC)|(X&0x3)
-	uint16_t XFinal = m_trans[(m_vgX&0x3FC)>>2]<<2|(m_vgX&0x3); // appears correct
+	uint16_t const XFinal = x_final();
 	// EA is the effective ram address for a 16-bit block
 	uint16_t EA = ((m_vgY&0x1FE)<<5)|(XFinal>>4); // appears correct
 	// block is the 16 bit block directly (note EA has to be <<1 to correctly index a byte)
@@ -326,8 +330,7 @@ uint8_t vk100_state::vram_read()
 // returns the attribute nybble for the current pixel based on X and Y regs
 uint8_t vk100_state::vram_attr_read()
 {
-	// XFinal is (X'&0x3FC)|(X&0x3)
-	uint16_t XFinal = m_trans[(m_vgX&0x3FC)>>2]<<2|(m_vgX&0x3); // appears correct
+	uint16_t const XFinal = x_final();
 	// EA is the effective ram address for a 16-bit block
 	uint16_t EA = ((m_vgY&0x1FE)<<5)|(XFinal>>4); // appears correct
 	// block is the 16 bit block directly (note EA has to be <<1 to correctly index a byte)
@@ -340,8 +343,7 @@ uint8_t vk100_state::vram_attr_read()
 // writes one nybble to vram array based on X and Y regs, and updates the attrib ram if needed
 void vk100_state::vram_write(uint8_t data)
 {
-	// XFinal is (X'&0x3FC)|(X&0x3)
-	uint16_t XFinal = m_trans[(m_vgX&0x3FC)>>2]<<2|(m_vgX&0x3); // appears correct
+	uint16_t const XFinal = x_final();
 	// EA is the effective ram address for a 16-bit block
 	uint16_t EA = ((m_vgY&0x1FE)<<5)|(XFinal>>4); // appears correct
 	// block is the 16 bit block directly (note EA has to be <<1 to correctly index a byte)
@@ -409,15 +411,7 @@ TIMER_CALLBACK_MEMBER(vk100_state::execute_vg)
 		m_vgGO = 0;
 		return;
 
-	case 3: // erase: wipe the entire screen (except for color/attrib?) and then set done
-		for (int i = 0; i < 0x8000; i++)
-		{
-			if (!(i & 1)) // avoid stomping attribute
-				m_vram[i] = m_vram[i] & 0xf0;
-			else
-				m_vram[i] = 0;
-		}
-		m_vgGO = 0;
+	case 3: // erase: done by the display refresh (crtc_de) until EX with D0 = 0
 		return;
 	}
 
@@ -572,6 +566,14 @@ void vk100_state::vgEX(offs_t offset, uint8_t data)
 	logerror("VG Execute %s 0x%02X written with %d\n", ex_functions[offset&3], 0x67+offset, data);
 	//fprintf(stderr, "VG Execute %s 0x%02X written with %d\n", ex_functions[offset&3], 0x67+offset, data);
 #endif
+	// GO is clocked from D0: the firmware writes 01 to start every function
+	// and 00 to end an erase (3E61), as on the VT125 (E38).  Inferred.
+	if (!BIT(data, 0))
+	{
+		m_vgGO = 0;
+		m_vg_timer->adjust(attotime::never);
+		return;
+	}
 	m_vgPMUL_Count = m_vgPMUL; // load PMUL_Count
 	m_vgPAT_Mask = 0x80;
 	m_vgDownCount = VG_DU; // set down counter to length of major vector
@@ -1003,6 +1005,35 @@ void vk100_state::crtc_vsync(int state)
 	m_vsync = state;
 }
 
+// ERASE (EX ER).  The vector PROM holds ERASE L and WRITE L in erase mode and
+// never asserts DONE L, so GO stays set until the firmware ends it, five
+// frames later.  ERASE L forces the sync PROM to the display refresh, which
+// addresses each word in turn, and drives A7 of the RAS/ERASE PROM
+// (23-573A2) low.  That half of the PROM enables all three pixel nybbles
+// unless X'3-2 is 3, and the attribute nybble too when the register file,
+// held on WOPS, has D3 (attribute change) set.
+//
+// Inferred: the pixels are written as 0 and the attribute as WOPS D7-D4, as
+// for a vector; and each displayed line is erased as the 6845 starts it
+// (the hardware refresh also runs through the blanking intervals).
+void vk100_state::crtc_de(int state)
+{
+	if (!state || !m_vgGO || m_VG_MODE != 3)
+		return;
+
+	uint8_t const we = m_ras_erase[(BIT(VG_WOPS, 3) << 2) | BIT(x_final(), 2, 2)];
+	uint16_t const keep = (BIT(we, 0) ? 0xf000 : 0) | (BIT(we, 1) ? 0x000f : 0) | (BIT(we, 2) ? 0x00f0 : 0) | (BIT(we, 3) ? 0x0f00 : 0);
+	uint16_t const fill = ((VG_WOPS & 0xf0) << 8) & ~keep;
+	uint16_t const ea = crtc_word(m_crtc->get_ma(), m_crtc->get_ra());
+	for (int i = 0; i < 64; i++)
+	{
+		unsigned const a = ((ea + i) & 0x3fff) << 1;
+		uint16_t const block = (((m_vram[a] << 8) | m_vram[a + 1]) & keep) | fill;
+		m_vram[a] = block >> 8;
+		m_vram[a + 1] = block & 0xff;
+	}
+}
+
 void vk100_state::i8251_rxrdy_int(int state)
 {
 	m_maincpu->set_input_line(I8085_RST65_LINE, state?ASSERT_LINE:CLEAR_LINE);
@@ -1046,11 +1077,7 @@ MC6845_UPDATE_ROW( vk100_state::crtc_update_row )
 	0x000000, 0x0000FF, 0xFF0000, 0xFF00FF, 0x00FF00, 0x00FFFF, 0xFFFF00, 0xFFFFFF,
 	0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000 };
 	//printf("y=%d, ma=%04x, ra=%02x, x_count=%02x ", y, ma, ra, x_count);
-	/* figure out ram address based on tech manual page 5-23:
-	 * real address to 16-bit chunk a13  a12  a11 a10 a9  a8  a7  a6  a5  a4  a3  a2  a1  a0
-	 * crtc input                  MA11 MA10 MA9 MA8 MA7 MA6 RA1 RA0 MA5 MA4 MA3 MA2 MA1 MA0
-	 */
-	uint16_t EA = ((ma&0xfc0)<<2)|((ra&0x3)<<6)|(ma&0x3F);
+	uint16_t const EA = crtc_word(ma, ra);
 	// display the 64 different 12-bit-wide chunks
 	for (int i = 0; i < 64; i++)
 	{
@@ -1084,6 +1111,7 @@ void vk100_state::vk100(machine_config &config)
 	m_crtc->set_char_width(12);
 	m_crtc->set_update_row_callback(FUNC(vk100_state::crtc_update_row));
 	m_crtc->out_vsync_callback().set(FUNC(vk100_state::crtc_vsync));
+	m_crtc->out_de_callback().set(FUNC(vk100_state::crtc_de));
 
 	/* i8251 uart */
 	I8251(config, m_uart);
@@ -1234,6 +1262,9 @@ ROM_START( vk100 )
 
 	ROM_REGION( 0x100, "vector", ROMREGION_ERASEFF )
 	// WARNING: it is possible that the first two bytes of this prom are bad!
+	// They are erase-mode states; the other erase rows (40, 80, C0) read 9E 9E
+	// there, and 00 would assert DONE L, ending an erase the firmware times
+	// itself.
 	// The PROM on andy's board appears to be damaged, this will need to be redumped from another board.
 	/* this is the "VECTOR ROM" (256*8, 82s135) which runs the vector generator state machine
 	 * the vector rom bits are complex and are unfortunately poorly documented
