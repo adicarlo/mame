@@ -561,19 +561,16 @@ void i8251_device::command_w(uint8_t data)
 
 	if (BIT(data, 6))
 	{
-		// Internal reset returns the device to the mode format, and the 8251A
-		// data sheet says it puts the device in the "Idle" state (RESET pin
-		// description).  It stops short of a full reset (device_reset): the
-		// DEC Rainbow's behaviour backs that up.  That the command's other bits
-		// then have no effect is inferred, since the data sheet only shows a
-		// bare 0x40; ER above still clears the error flags.
-		// Without this, a third 0x4e written to reset the device arrives as a
-		// command, and its SBRK holds TxD at break.
+		// Internal reset returns the device to the mode format and, per the
+		// 8251A data sheet (RESET pin), to the "Idle" state.  It stops short
+		// of a full reset (device_reset), as the DEC Rainbow's behaviour backs
+		// up.  Treating the rest of the command as 0 is inferred: the data
+		// sheet only shows a bare 0x40.
 		m_flags = I8251_NEXT_MODE;
 		data = 0x40;
 	}
 
-	/* command */
+	// command
 	m_command = data;
 
 	m_rts_handler(!BIT(data, 5));
