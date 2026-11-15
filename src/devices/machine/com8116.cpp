@@ -140,6 +140,9 @@ void com8116_device::device_start()
 		m_fx4_timer = timer_alloc(FUNC(com8116_device::fx4_tick), this);
 		m_fx4_timer->adjust(attotime::from_hz((clock() / 4) * 2), 0, attotime::from_hz((clock() / 4)) * 2);
 	}
+	// nothing latched yet: the first write starts each divider
+	m_str = m_stt = 0xff;
+
 	m_fr_timer = timer_alloc(FUNC(com8116_device::fr_tick), this);
 	m_ft_timer = timer_alloc(FUNC(com8116_device::ft_tick), this);
 
@@ -150,6 +153,8 @@ void com8116_device::device_start()
 	save_item(NAME(m_fx4));
 	save_item(NAME(m_fr));
 	save_item(NAME(m_ft));
+	save_item(NAME(m_str));
+	save_item(NAME(m_stt));
 }
 
 
@@ -199,11 +204,32 @@ TIMER_CALLBACK_MEMBER(com8116_device::ft_tick)
 
 
 //-------------------------------------------------
+//  latch - load a divisor select code; the strobe
+//  is level sensitive and a new frequency starts
+//  only when the select bits change, so latching
+//  the same code again leaves the divider running
+//  undisturbed (COM8116 data sheet)
+//-------------------------------------------------
+
+bool com8116_device::latch(uint8_t &latched, uint8_t data)
+{
+	data &= 0x0f;
+	if (data == latched)
+		return false;
+	latched = data;
+	return true;
+}
+
+
+//-------------------------------------------------
 //  str_w -
 //-------------------------------------------------
 
 void com8116_device::str_w(uint8_t data)
 {
+	if (!latch(m_str, data))
+		return;
+
 	int fr_divider = data & 0x0f;
 	int fr_clock = clock() / m_divisors[fr_divider];
 
@@ -219,6 +245,9 @@ void com8116_device::str_w(uint8_t data)
 
 void com8116_device::stt_w(uint8_t data)
 {
+	if (!latch(m_stt, data))
+		return;
+
 	int ft_divider = data & 0x0f;
 	int ft_clock = clock() / m_divisors[ft_divider];
 
