@@ -99,9 +99,14 @@ device_vt100_stp_interface::device_vt100_stp_interface(const machine_config &mco
     - the printer speed: the firmware writes its SET-UP C speed code (the
       VT100's 0-15 rate table; 6 = 300 baud, the default) by executing
       OUT <E0 + code>: the code is in the address, not the data (the first
-      one goes out with A = 25h).  A baud rate generator taking A0-A3 at
-      E0-EF is assumed; its part isn't known, so the terminal's own
-      COM5016-013 is used.
+      one goes out with A = 25h).  The board carries a COM8116T-003
+      ("8116T-003 SMC8015"), taking A0-A3 at E0-EF (inferred).
+    - the clock: the board's only clock source is an oscillator can, "NEL
+      16-11660-36 5.99?8MHz" (one digit unreadable in the photos), next to
+      a D8085A and the 8116T (photos of a 54-14260 in an eBay listing).
+      It is taken to drive the 8085 and the 8116T's external input, with
+      the 8251s on the 8085's CLK output (inferred: the photos are too
+      coarse to trace).  4.9152 MHz was the earlier guess.
     - interrupts: receiver ready on RST 6.5 and transmitter ready on RST
       5.5, which the firmware enables (SIM 0Ch).  Each 8251's RTS output
       gates its transmitter ready: the firmware stops a channel by setting
@@ -306,32 +311,34 @@ void vt100_stp_ac_device::device_reset_after_children()
 
 void vt100_stp_ac_device::device_add_mconfig(machine_config &config)
 {
-	I8085A(config, m_cpu, 4.9152_MHz_XTAL);
+	constexpr u32 OSC = 5'998'800; // "5.99?8MHz": see the notes above
+
+	I8085A(config, m_cpu, OSC);
 	m_cpu->set_addrmap(AS_PROGRAM, &vt100_stp_ac_device::mem_map);
 	m_cpu->set_addrmap(AS_IO, &vt100_stp_ac_device::io_map);
 
 	INPUT_MERGER_ANY_HIGH(config, m_rxint).output_handler().set_inputline(m_cpu, I8085_RST65_LINE);
 
-	I8251(config, m_line, 4.9152_MHz_XTAL / 2);
+	I8251(config, m_line, OSC / 2);
 	m_line->txd_handler().set(FUNC(vt100_stp_ac_device::drive_w<vt100_stp_slot_device::LINE_TXD>));
 	m_line->dtr_handler().set(FUNC(vt100_stp_ac_device::drive_w<vt100_stp_slot_device::LINE_DTR>));
 	m_line->rxrdy_handler().set(m_rxint, FUNC(input_merger_device::in_w<0>));
 	m_line->txrdy_handler().set(FUNC(vt100_stp_ac_device::txrdy_w<0>));
 	m_line->rts_handler().set(FUNC(vt100_stp_ac_device::rts_w<0>));
 
-	I8251(config, m_local, 4.9152_MHz_XTAL / 2);
+	I8251(config, m_local, OSC / 2);
 	m_local->txd_handler().set(FUNC(vt100_stp_ac_device::drive_w<vt100_stp_slot_device::TC_RXD>));
 	m_local->rxrdy_handler().set(m_rxint, FUNC(input_merger_device::in_w<1>));
 	m_local->txrdy_handler().set(FUNC(vt100_stp_ac_device::txrdy_w<1>));
 	m_local->rts_handler().set(FUNC(vt100_stp_ac_device::rts_w<1>));
 
-	I8251(config, m_prt, 4.9152_MHz_XTAL / 2);
+	I8251(config, m_prt, OSC / 2);
 	m_prt->txd_handler().set(m_printer, FUNC(rs232_port_device::write_txd));
 	m_prt->rxrdy_handler().set(m_rxint, FUNC(input_merger_device::in_w<2>));
 	m_prt->txrdy_handler().set(FUNC(vt100_stp_ac_device::txrdy_w<2>));
 	m_prt->rts_handler().set(FUNC(vt100_stp_ac_device::rts_w<2>));
 
-	COM5016_013(config, m_brg, XTAL(24'883'200) / 9);
+	COM8116_003(config, m_brg, OSC);
 	m_brg->fr_handler().set(m_prt, FUNC(i8251_device::write_rxc));
 	m_brg->ft_handler().set(m_prt, FUNC(i8251_device::write_txc));
 
