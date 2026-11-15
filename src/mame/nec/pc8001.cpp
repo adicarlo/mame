@@ -620,6 +620,13 @@ void pc8001_base_state::cmt_reset_demod()
 
 void pc8001_base_state::cmt_update_rxc()
 {
+	// BS2 set: RxC comes from the RS-232C clock instead
+	if (BIT(m_cmt_baud_sel, 1))
+	{
+		m_cmt_rxc_timer->adjust(attotime::never);
+		return;
+	}
+
 	// RxC runs at the baud rate times the 8251 baud rate factor; the device
 	// only counts rising edges, so the timer has to toggle at twice that
 	const int baud = BIT(m_cmt_baud_sel, 0) ? 1200 : 600;
@@ -720,6 +727,78 @@ void pc8001_base_state::usart_w(offs_t offset, u8 data)
 }
 
 /*
+ * RS-232C port (PC-8001 schematic, I/O magazine, "CMT & SIO").
+ *
+ * The connector is TTL level with RS-232 polarity: one 74LS04 or 7406
+ * stage between it and the 8251 on every line, so the 8251 side of each
+ * line matches MAME's rs232 port (0 = asserted, 1 = mark) directly.  CD
+ * has no inverter and reaches CDIN (port $40 bit 2) the other way up.
+ *
+ * Two 74LS153s (IC85, IC86), selected by port $30 BS2:BS1, switch RxD,
+ * RxC, TxC and CDIN between the cassette and the port; BS2:BS1 = 10
+ * selects the port.  Its clock is phiS / 13 (IC54) through a 74LS393
+ * (IC87) to the CN8 jumper: 9600 down to 600 baud at x16.  BS2:BS1 = 11
+ * (sync) has no clock source on the board.  TxD, RTS and DTR are not
+ * switched.  CTS is held asserted (IC62, open collector) while BS2 = 0.
+ */
+void pc8001_state::port30_w(u8 data)
+{
+	pc8001_base_state::port30_w(data);
+
+	// re-assert the port's RxD over the cassette receiver's idle mark
+	if (rs232_selected())
+		m_cmt_usart->write_rxd(m_rs232_rxd);
+	rs232_update_cts();
+	rs232_update_clock();
+}
+
+void pc8001_state::rs232_update_clock()
+{
+	// stop the clock while the cassette has the 8251
+	if (rs232_selected())
+		m_rs232_clock->set_unscaled_clock(15.9744_MHz_XTAL / 4 / 13 / m_cn8->read());
+	else
+		m_rs232_clock->set_unscaled_clock(0);
+}
+
+INPUT_CHANGED_MEMBER(pc8001_state::cn8_changed)
+{
+	rs232_update_clock();
+}
+
+void pc8001_state::rs232_clock_w(int state)
+{
+	if (rs232_selected())
+	{
+		m_cmt_usart->write_txc(state);
+		m_cmt_usart->write_rxc(state);
+	}
+}
+
+void pc8001_state::rs232_rxd_w(int state)
+{
+	m_rs232_rxd = state;
+	if (rs232_selected())
+		m_cmt_usart->write_rxd(state);
+}
+
+void pc8001_state::rs232_dcd_w(int state)
+{
+	m_rs232_dcd = state;
+}
+
+void pc8001_state::rs232_cts_w(int state)
+{
+	m_rs232_cts = state;
+	rs232_update_cts();
+}
+
+void pc8001_state::rs232_update_cts()
+{
+	m_cmt_usart->write_cts(BIT(m_cmt_baud_sel, 1) ? m_rs232_cts : 0);
+}
+
+/*
  * xxx- ---- background color
  * ---x ---- resolution (0=640x200, 1=320x200)
  * ---- x--- graphics enable
@@ -773,7 +852,7 @@ uint8_t pc8001_state::port40_r()
 
 	data |= m_centronics_busy;
 	data |= m_centronics_ack << 1;
-	data |= cmt_cdin_r() << 2;
+	data |= (rs232_selected() ? !m_rs232_dcd : cmt_cdin_r()) << 2;
 	data |= m_rtc->data_out_r() << 4;
 	data |= m_crtc->vrtc_r() << 5;
 	// TODO: enable line from pc80s31k (bit 3, active_low)
@@ -946,8 +1025,6 @@ void pc8001_state::pc8001_io(address_map &map)
 //  map(0xc1, 0xc1).rw(PC8011_CH1_I8251_TAG, FUNC(i8251_device::status_r), FUNC(i8251_device::control_w));
 //  map(0xc2, 0xc2).rw(PC8011_CH2_I8251_TAG, FUNC(i8251_device::data_r), FUNC(i8251_device::data_w));
 //  map(0xc3, 0xc3).rw(PC8011_CH2_I8251_TAG, FUNC(i8251_device::status_r), FUNC(i8251_device::control_w));
-//  map(0xc8, 0xc8) RS-232 output enable?
-//  map(0xca, 0xca) RS-232 output disable?
 //  map(0xd0, 0xd3).rw(PC8011_IEEE488_I8255A_TAG, FUNC(i8255_device::read), FUNC(i8255_device::write));
 //  map(0xd8, 0xd8).r(FUNC(pc8001_state::pc8011_ieee488_control_signal_input_r));
 //  map(0xda, 0xda).r(FUNC(pc8001_state::pc8011_ieee488_bus_address_mode_r));
@@ -1198,6 +1275,15 @@ void pc8001mk2sr_state::pc8001mk2sr_io(address_map &map)
 
 static INPUT_PORTS_START( pc8001 )
 //  PORT_START("DSW1")
+
+	// divides the 307.2 kHz RS-232C clock; the 8251 is at x16 for these
+	PORT_START("CN8")
+	PORT_CONFNAME(0x3f, 0x02, "RS-232C baud rate (CN8)") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(pc8001_state::cn8_changed), 0)
+	PORT_CONFSETTING(0x02, "9600")
+	PORT_CONFSETTING(0x04, "4800")
+	PORT_CONFSETTING(0x08, "2400")
+	PORT_CONFSETTING(0x10, "1200")
+	PORT_CONFSETTING(0x20, "600")
 INPUT_PORTS_END
 
 static INPUT_PORTS_START( pc8001mk2 )
@@ -1337,6 +1423,10 @@ void pc8001_state::machine_start()
 
 	// PC8001 is 15KHz only
 	set_screen_frequency(false);
+
+	save_item(NAME(m_rs232_rxd));
+	save_item(NAME(m_rs232_dcd));
+	save_item(NAME(m_rs232_cts));
 }
 
 void pc8001_base_state::picu_reset()
@@ -1353,6 +1443,9 @@ void pc8001_state::machine_reset()
 {
 	m_exp_view.select(1);
 	picu_reset();
+
+	rs232_update_cts();
+	rs232_update_clock();
 }
 
 void pc8001mk2_state::machine_start()
@@ -1480,8 +1573,20 @@ void pc8001_state::pc8001(machine_config &config)
 	/* devices */
 	TIMER(config, "rtc_timer").configure_periodic(FUNC(pc8001_state::clock_irq_w), attotime::from_hz(600));
 
-	I8251(config, I8251_TAG);
-	subdevice<i8251_device>(I8251_TAG)->rxrdy_handler().set(FUNC(pc8001_state::rxrdy_irq_w));
+	I8251(config, m_cmt_usart, 15.9744_MHz_XTAL / 4);
+	m_cmt_usart->rxrdy_handler().set(FUNC(pc8001_state::rxrdy_irq_w));
+	m_cmt_usart->txd_handler().set(m_rs232, FUNC(rs232_port_device::write_txd));
+	m_cmt_usart->rts_handler().set(m_rs232, FUNC(rs232_port_device::write_rts));
+	m_cmt_usart->dtr_handler().set(m_rs232, FUNC(rs232_port_device::write_dtr));
+
+	CLOCK(config, m_rs232_clock, 0);
+	m_rs232_clock->signal_handler().set(FUNC(pc8001_state::rs232_clock_w));
+
+	RS232_PORT(config, m_rs232, default_rs232_devices, nullptr);
+	m_rs232->rxd_handler().set(FUNC(pc8001_state::rs232_rxd_w));
+	m_rs232->dcd_handler().set(FUNC(pc8001_state::rs232_dcd_w));
+	m_rs232->dsr_handler().set(m_cmt_usart, FUNC(i8251_device::write_dsr));
+	m_rs232->cts_handler().set(FUNC(pc8001_state::rs232_cts_w));
 
 	UPD1990A(config, m_rtc);
 

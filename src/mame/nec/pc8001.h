@@ -8,11 +8,13 @@
 #include "bus/centronics/ctronics.h"
 #include "bus/nec_fdd/pc80s31k.h"
 #include "bus/pc8801/pc8801_exp.h"
+#include "bus/rs232/rs232.h"
 #include "cpu/z80/z80.h"
 #include "imagedev/cassette.h"
 #include "imagedev/snapquik.h"
 #include "machine/bankdev.h"
 #include "machine/buffer.h"
+#include "machine/clock.h"
 #include "machine/i8214.h"
 #include "machine/i8251.h"
 #include "machine/i8255.h"
@@ -170,9 +172,14 @@ public:
 		, m_rom(*this, Z80_TAG)
 		, m_exp(*this, "exp")
 		, m_exp_view(*this, "exp_view")
+		, m_rs232(*this, "rs232")
+		, m_rs232_clock(*this, "rs232_clock")
+		, m_cn8(*this, "CN8")
 	{ }
 
 	void pc8001(machine_config &config);
+
+	DECLARE_INPUT_CHANGED_MEMBER(cn8_changed);
 
 protected:
 	void pc8001_io(address_map &map) ATTR_COLD;
@@ -190,6 +197,24 @@ protected:
 	required_memory_region m_rom;
 	required_device<pc8801_exp_slot_device> m_exp;
 	memory_view m_exp_view;
+	required_device<rs232_port_device> m_rs232;
+	required_device<clock_device> m_rs232_clock;
+	required_ioport m_cn8;
+
+	void port30_w(u8 data);
+
+	// RS-232C port, on the 8251 while port $30 BS2:BS1 = 10
+	bool rs232_selected() const { return m_cmt_baud_sel == 2; }
+	void rs232_update_clock();
+	void rs232_update_cts();
+	void rs232_clock_w(int state);
+	void rs232_rxd_w(int state);
+	void rs232_dcd_w(int state);
+	void rs232_cts_w(int state);
+
+	int m_rs232_rxd = 1;
+	int m_rs232_dcd = 1;
+	int m_rs232_cts = 1;
 
 	DECLARE_SNAPSHOT_LOAD_MEMBER(snapshot_cb);
 
