@@ -204,17 +204,31 @@ TIMER_CALLBACK_MEMBER(com8116_device::ft_tick)
 
 
 //-------------------------------------------------
+//  latch - load a divisor select code; the strobe
+//  is level sensitive and a new frequency starts
+//  only when the select bits change, so latching
+//  the same code again leaves the divider running
+//  undisturbed (COM8116 data sheet)
+//-------------------------------------------------
+
+bool com8116_device::latch(uint8_t &latched, uint8_t data)
+{
+	data &= 0x0f;
+	if (data == latched)
+		return false;
+	latched = data;
+	return true;
+}
+
+
+//-------------------------------------------------
 //  str_w -
 //-------------------------------------------------
 
 void com8116_device::str_w(uint8_t data)
 {
-	// The strobe is level sensitive and a new frequency starts only when
-	// the select bits change; latching the same code again leaves the
-	// divider running undisturbed.
-	if ((data & 0x0f) == m_str)
+	if (!latch(m_str, data))
 		return;
-	m_str = data & 0x0f;
 
 	int fr_divider = data & 0x0f;
 	int fr_clock = clock() / m_divisors[fr_divider];
@@ -231,12 +245,8 @@ void com8116_device::str_w(uint8_t data)
 
 void com8116_device::stt_w(uint8_t data)
 {
-	// The strobe is level sensitive and a new frequency starts only when
-	// the select bits change; latching the same code again leaves the
-	// divider running undisturbed.
-	if ((data & 0x0f) == m_stt)
+	if (!latch(m_stt, data))
 		return;
-	m_stt = data & 0x0f;
 
 	int ft_divider = data & 0x0f;
 	int ft_clock = clock() / m_divisors[ft_divider];

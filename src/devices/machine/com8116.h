@@ -69,6 +69,8 @@ protected:
 	TIMER_CALLBACK_MEMBER(ft_tick);
 
 private:
+	bool latch(uint8_t &latched, uint8_t data);
+
 	devcb_write_line   m_fx4_handler;
 	devcb_write_line   m_fr_handler;
 	devcb_write_line   m_ft_handler;
