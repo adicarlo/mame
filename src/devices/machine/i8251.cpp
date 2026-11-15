@@ -210,20 +210,16 @@ void i8251_device::receive_clock()
 		receive_register_update_bit(m_rxd);
 		if (is_receive_register_synchronized())
 		{
-			if (sync)
+			if (!sync && m_br_factor > 1)
 			{
-				m_rxc_count = m_br_factor;
-			}
-			else if (m_br_factor > 1)
-			{
-				// check the start bit again half a bit from now
+				// a start bit has just been seen: check it again half a bit
+				// from now
 				m_rx_start_check = true;
 				m_rxc_count = m_br_factor / 2;
 			}
 			else
 			{
-				m_rx_start_check = false;
-				m_rxc_count = 3 * m_br_factor / 2;
+				m_rxc_count = m_br_factor;
 			}
 		}
 
@@ -626,6 +622,7 @@ void i8251_device::command_w(uint8_t data)
 	}
 
 	// command
+	bool const was_break = BIT(m_command, 3);
 	m_command = data;
 
 	m_rts_handler(!BIT(data, 5));
@@ -639,15 +636,13 @@ void i8251_device::command_w(uint8_t data)
 	if (m_hunt_on)
 		m_ext_syn_set = false;
 
-	// TxD is held marking whenever the transmitter is empty, unless SBRK is
-	// set (8251A data sheet, Features and Asynchronous Mode (Transmission)).  A
-	// command that clears SBRK, an internal reset included, ends the break
-	// Async only: in sync mode the idle transmitter sends SYNC characters,
-	// and the last bit of a character, which can be 0, is still going out
-	// when the register already reads empty
+	// An empty transmitter holds TxD marking unless SBRK is set (8251A data
+	// sheet, Features and Asynchronous Mode (Transmission)), so a command that
+	// clears SBRK, an internal reset included, ends the break.  Not while a
+	// sync mode transmitter idles on SYNC characters, as transmit_clock does.
 	if (BIT(data, 3))
 		m_txd_handler(0);
-	else if (!m_sync_byte_count && is_transmit_register_empty())
+	else if (was_break && is_transmit_register_empty() && !(m_sync_byte_count && is_tx_enabled()))
 		m_txd_handler(1);
 
 	check_for_tx_start();
