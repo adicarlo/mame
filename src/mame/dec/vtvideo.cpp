@@ -30,7 +30,7 @@ FIXME: work out the differences and identify common code between VT and Rainbow.
 - NEW - INTERLACED MODE (Rainbow; VT: done, see above):
   Vertical resolution increases from 240 to 480, while the refresh rate halves (flickers on CRTs).
   To accomplish this, the display controller repeats even lines in odd scans.
-  VTVIDEO activates line doubling in 24 line, interlaced mode only.
+  VTVIDEO activates line doubling in 24 or 25 line, interlaced mode only.
 
   Although the DC12 has the ability to display 48 lines, most units are low on screen RAM and
   won't even show 80 x 48. -> REASON: (83 x 48 = 3984 Byte) > (screen RAM) minus 'scratch area'
@@ -489,7 +489,6 @@ void vt100_video_device::video_update(bitmap_ind16 &bitmap, const rectangle &cli
 				// frame (inferred: the manual only says the DMA runs to the 7F)
 				logerror("unterminated screen line at %04x\n", 0x2000 + addr);
 				valid = false;
-				length = 0;
 				display_type = 3;
 			}
 			else
@@ -504,17 +503,17 @@ void vt100_video_device::video_update(bitmap_ind16 &bitmap, const rectangle &cli
 		if (scan >= first_scan)
 		{
 			int const y = (scan - first_scan) * fields;
-			auto const draw = [&] (int x, uint8_t code, uint8_t type, bool invert, bool bold, bool blink, bool underline, bool blank)
+			auto const draw = [&] (int x, uint8_t code, bool invert, bool bold, bool blink, bool underline, bool blank)
 			{
 				for (int field = 0; field < fields; field++)
-					draw_scan(bitmap, y + field, x, code, row, type, invert, bold, blink, underline, blank, false);
+					draw_scan(bitmap, y + field, x, code, row, display_type, invert, bold, blink, underline, blank, false);
 			};
 			int const width = (display_type != 3) ? (columns / 2) : columns;
 			for (int x = 0; x < width; x++)
 			{
 				if (!valid)
 				{
-					draw(x, 0, 3, false, false, false, false, true);
+					draw(x, 0, false, false, false, false, true);
 				}
 				else if (x < length)
 				{
@@ -522,12 +521,12 @@ void vt100_video_device::video_update(bitmap_ind16 &bitmap, const rectangle &cli
 					// 3 ALT CHAR SET, which switches E4 out for the alternate ROM E9
 					uint8_t const attr = attrs[x];
 					uint8_t const set = BIT(attr, 3) ? 0x00 : 0x80;
-					draw(x, set | (codes[x] & 0x7f), display_type, BIT(codes[x], 7), !BIT(attr, 2), !BIT(attr, 0), !BIT(attr, 1), false);
+					draw(x, set | (codes[x] & 0x7f), BIT(codes[x], 7), !BIT(attr, 2), !BIT(attr, 0), !BIT(attr, 1), false);
 				}
 				else
 				{
 					// past the terminator
-					draw(x, 0x7f, display_type, false, false, false, false, false);
+					draw(x, 0x7f, false, false, false, false, false);
 				}
 			}
 
