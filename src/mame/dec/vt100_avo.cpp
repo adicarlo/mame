@@ -6,7 +6,7 @@
 
     Plugs onto the terminal controller board's J1.  Adds 1K x 8 of screen
     RAM at 2C00-2FFF, 4K x 4 of attribute RAM at 3000-3FFF, and four 2K
-    program ROM sockets plus an 8K one.
+    program ROM sockets, E8 also taking an 8K ROM.
 
     The terminal controller decodes only A10-A13, so its ROM and RAM repeat
     every 16K.  The AVO decodes A13-A15 (E12, a 74LS138 enabled on every
@@ -14,8 +14,10 @@
     gates on its 8000-9FFF and A000-BFFF outputs), so that area is the AVO's
     whether or not its sockets are filled; the patch switches add blocks
     below 2000 only.  TM-003 6.2.5.3 reads as if MEM DISABLE depended on the
-    jumpers; the schematic doesn't.  Its RAM is selected from the terminal
-    controller's decode, so it repeats with the base RAM outside 8000-BFFF.
+    jumpers and covered all memory above 4000; the schematic does neither
+    (E12's other outputs are unconnected).  Its RAM is selected from the
+    terminal controller's decode, so it repeats with the base RAM outside
+    8000-BFFF.
 
     Switch pack S1 (E19 on the schematic; jumpers W1-W8 on early boards,
     Wn = S1-(9-n)) sets the ROM decode; closed enables:
@@ -33,6 +35,9 @@
     TM's settings (table 5-10): none for a VT100, S1-3 for the VT1XX-AC and
     VT100-WC..WK, S1-8 and S1-2 for the VT100-WA/WB.  The decode is read at
     reset.
+
+    TM 6.2.3 names the 2K sockets E19, E17, E13 and E8; the schematic and
+    its legend have E21 for ROM A (E19 is the S1 switch pack).
 
     Sources: VT100 technical manual EK-VT100-TM-003, 4.2.5 and 6.2.3,
     tables 5-8 to 5-10, figure 5-34; MP-00633 print set, AVO schematic
@@ -97,6 +102,7 @@ public:
 	{
 	}
 
+	// device_vt100_avo_interface implementation
 	virtual u8 video_r(offs_t offset) override;
 
 protected:
@@ -110,12 +116,13 @@ protected:
 	{
 	}
 
+	// device_t implementation
 	virtual void device_start() override ATTR_COLD;
 	virtual void device_reset() override ATTR_COLD;
 	virtual ioport_constructor device_input_ports() const override ATTR_COLD;
 
 private:
-	u8 attr_r(offs_t offset) { return m_attr[offset] | 0xf0; }   // 4 bits wide
+	u8 attr_r(offs_t offset) { return m_attr[offset] | 0xf0; }   // 4 bits wide; D4-D7 undriven, assumed to read high
 	void attr_w(offs_t offset, u8 data) { m_attr[offset] = data & 0x0f; }
 
 	u8 socket_r(offs_t offset);
@@ -227,10 +234,12 @@ void vt100_avo_device::device_start()
 			read8sm_delegate(*this, FUNC(vt100_avo_device::attr_r)),
 			write8sm_delegate(*this, FUNC(vt100_avo_device::attr_w)));
 
-	// MEM DISABLE: 8000-BFFF is always the AVO's; the patch blocks are
-	// views over the base firmware
+	// MEM DISABLE: 8000-BFFF is always the AVO's, unselected and empty
+	// sockets read open bus (assumed all ones, as on vt101_mem).  Must
+	// follow the RAM installs: it replaces their mirrors at AC00-BFFF.  The
+	// patch blocks are views over the base firmware.
+	mem.nop_write(0x8000, 0xbfff);
 	mem.install_read_handler(0x8000, 0xbfff, read8sm_delegate(*this, FUNC(vt100_avo_device::socket_r)));
-	mem.unmap_write(0x8000, 0xbfff);
 	for (int i = 0; i < 4; i++)
 	{
 		offs_t const base = i * 0x800;
@@ -282,8 +291,10 @@ u8 vt100_avo_device::video_r(offs_t offset)
 {
 	if (offset < 0x1000)
 		return m_screen[offset & 0x3ff];
-	else
+	else if (offset < 0x2000)
 		return attr_r(offset & 0xfff);
+	else
+		return 0xff;
 }
 
 } // anonymous namespace
