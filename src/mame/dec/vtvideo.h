@@ -66,8 +66,7 @@ protected:
 	void draw_scan(bitmap_ind16 &bitmap, int y_preset, int x, uint8_t code, int i, uint8_t display_type, bool invert, bool bold, bool blink, bool underline, bool blank, bool also_next_row);
 	TIMER_CALLBACK_MEMBER(lba3_change);
 	TIMER_CALLBACK_MEMBER(lba7_change);
-	virtual void notify_vblank(bool choice) { }
-	virtual void vertical_reset();
+	virtual void notify_vblank(bool choice);
 
 	graphics_delegate  m_graphics_cb;
 	altchar_delegate   m_altchar_cb;
@@ -101,7 +100,7 @@ protected:
 	required_device<palette_device> m_palette;
 
 	bool m_notify_vblank = false;
-	u8 m_last_scroll = 0;
+	uint8_t m_last_scroll = 0;
 	uint8_t m_brightness = 0; // D/A latch D0-D4
 
 	bool m_linedoubler = false;
@@ -121,7 +120,6 @@ public:
 
 protected:
 	virtual void notify_vblank(bool choice) override;
-	virtual void vertical_reset() override { } // loads it on the interrupt acknowledge instead (notify_vblank)
 	virtual void device_reset() override ATTR_COLD;
 };
 
