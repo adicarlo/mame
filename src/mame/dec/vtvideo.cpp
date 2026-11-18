@@ -134,6 +134,12 @@ void vt100_video_device::device_start()
 	save_item(NAME(m_is_50hz));
 	save_item(NAME(m_interlaced));
 	save_item(NAME(m_brightness));
+	// the screen saves its own geometry; the line doubler set with it
+	// (recompute_parameters) must match, or a load drawn at the wrong
+	// row pitch overruns the bitmap
+	save_item(NAME(m_linedoubler));
+	save_item(NAME(m_scroll_latch_valid));
+	save_item(NAME(m_notify_vblank));
 }
 
 //-------------------------------------------------
