@@ -740,7 +740,6 @@ private:
 	void target_interrupt_message();
 	void target_resume_transfer();
 	void target_send_byte(uint8_t val);
-	void target_send_buffer_byte();
 };
 
 #endif

@@ -281,11 +281,15 @@ void nscsi_full_device::step(bool timeout)
 		break;
 	}
 
-	case TARGET_WAIT_DATA_IN_BYTE:
-		if(m_data_buffer_pos == m_data_buffer_size-1)
+	case TARGET_WAIT_DATA_IN_BYTE: {
+		// fetch the byte before moving on: a target may queue its next phase
+		// from scsi_get_data(), which must not start before this byte is sent
+		const u8 data = scsi_get_data(m_data_buffer_id, m_data_buffer_pos++);
+		if(m_data_buffer_pos == m_data_buffer_size)
 			m_scsi_state = TARGET_NEXT_CONTROL;
-		target_send_buffer_byte();
+		target_send_byte(data);
 		break;
+	}
 
 	case TARGET_WAIT_DATA_OUT_BYTE:
 		if(m_data_buffer_pos == m_data_buffer_size-1)
@@ -405,11 +409,6 @@ void nscsi_full_device::scsi_put_data(int id, int pos, uint8_t data)
 	default:
 		fatalerror("nscsi_full_device::scsi_put_data - unknown id %d\n", id);
 	}
-}
-
-void nscsi_full_device::target_send_buffer_byte()
-{
-	target_send_byte(scsi_get_data(m_data_buffer_id, m_data_buffer_pos++));
 }
 
 bool nscsi_full_device::scsi_command_done(uint8_t command, uint8_t length)
