@@ -10,15 +10,20 @@
     and records MFM only (EK-VT18X-TM-001 6.6).  A disk has 40 tracks of
     nine 512-byte sectors numbered 1 to 9: the CP/M boot sector reads
     sectors 1-9 of each track.  Images are the sectors in order, track 0
-    first.  The interleave and gaps the VT180 formatter (DDFMT.COM) writes
-    aren't known; these are the IBM PC 360K values, which fit nine sectors
-    on a 300 rpm track.
+    first.
+
+    The track layout is what the VT180 formatter (DDFMT.COM) writes with
+    a WRITE TRACK, the same on every track: 80 bytes of 4E, an index
+    address mark, 50 of 4E, then sectors 1 to 9 in order with no
+    interleave, each with a 22-byte gap 2 and a 65-byte gap 3.  DDFMT's
+    gap 3 is one 00 then 64 4E; it's all 4E here, which a read can't
+    tell apart.  DDFMT fills the sectors with E5.
 
 *********************************************************************/
 
 #include "formats/vt180_dsk.h"
 
-vt180_format::vt180_format() : wd177x_format(formats)
+vt180_format::vt180_format() : upd765_format(formats)
 {
 }
 
@@ -44,7 +49,7 @@ const vt180_format::format vt180_format::formats[] = {
 		9, 40, 1,
 		512, {},
 		1, {},
-		80, 22, 80
+		80, 50, 22, 65
 	},
 	{}
 };

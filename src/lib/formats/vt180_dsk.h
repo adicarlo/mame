@@ -12,9 +12,9 @@
 
 #pragma once
 
-#include "wd177x_dsk.h"
+#include "upd765_dsk.h"
 
-class vt180_format : public wd177x_format
+class vt180_format : public upd765_format
 {
 public:
 	vt180_format();
