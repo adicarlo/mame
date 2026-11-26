@@ -284,10 +284,10 @@ void nscsi_full_device::step(bool timeout)
 	case TARGET_WAIT_DATA_IN_BYTE: {
 		// fetch the byte before moving on: a target may queue its next phase
 		// from scsi_get_data(), which must not start before this byte is sent
-		const u8 data = scsi_get_data(m_data_buffer_id, m_data_buffer_pos++);
+		const u8 byte = scsi_get_data(m_data_buffer_id, m_data_buffer_pos++);
 		if(m_data_buffer_pos == m_data_buffer_size)
 			m_scsi_state = TARGET_NEXT_CONTROL;
-		target_send_byte(data);
+		target_send_byte(byte);
 		break;
 	}
 
