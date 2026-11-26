@@ -66,6 +66,7 @@ private:
 	};
 
 	static const u8 mode_table[16];
+	static constexpr offs_t NO_RAM = ~offs_t(0);
 
 	class mmu : public m68000_device::mmu {
 	public:
@@ -101,7 +102,7 @@ private:
 
 		inline u16 read(offs_t addr, u16 mem_mask);
 		inline void write(offs_t addr, u16 data, u16 mem_mask);
-		inline void write_access(offs_t addr, u16 data, u16 mem_mask);
+		inline offs_t write_access(offs_t addr, u16 data, u16 mem_mask);
 		void recompute_slot();
 	};
 
@@ -117,16 +118,20 @@ private:
 
 	std::vector<u32> m_bad_parity; // one bit per RAM byte written with DIAG2 set
 	u32 m_bad_parity_count;
-	u32 m_error_address;
+	emu_timer *m_video_parity_timer;
+	u16 m_error_address;
 	u8 m_seg;
 	bool m_diag1, m_diag2;
 	bool m_soft_mask, m_soft_error, m_hard_mask, m_hard_error;
 
 	void default_autovectors_map(address_map &map);
 	void ram_access(offs_t address, u16 mem_mask, bool write);
-	void write_cycle();
-	void latch_hard_error();
+	void write_cycle(offs_t ram_address);
+	void freeze_error_address(offs_t ram_address);
+	void latch_soft_error(offs_t ram_address);
+	void latch_hard_error(offs_t ram_address);
 	void update_nmi();
+	TIMER_CALLBACK_MEMBER(video_parity_check);
 };
 
 DECLARE_DEVICE_TYPE(LISAMMU, lisa_mmu_device)

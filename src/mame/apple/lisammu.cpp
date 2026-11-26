@@ -144,11 +144,11 @@ void lisa_mmu_device::mmu::write(offs_t addr, u16 data, u16 mem_mask)
 		if(m_maincpu->access_before_time((cyc|3) + 1, cyc))
 			return;
 
-	write_access(addr, data, mem_mask);
-	m_dev.write_cycle();
+	m_dev.write_cycle(write_access(addr, data, mem_mask));
 }
 
-void lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
+// Returns the RAM address written, or NO_RAM for any other cycle
+offs_t lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
 {
 	int slot = m_current_base | ((addr & 0xffffff) >> 17);
  retry:
@@ -157,33 +157,33 @@ void lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
 	case INVALID: case MAIN_RO: case MAIN_RO_STACK:
 	default:
 		m_maincpu->trigger_bus_error();
-		return;
+		return NO_RAM;
 
 	case MAIN_RW:
 		if(newaddr >= m_limit_address[slot]) {
 			m_maincpu->trigger_bus_error();
-			return;
+			return NO_RAM;
 		}
 		m_ram.write_interruptible(newaddr, data, mem_mask);
 		m_dev.ram_access(newaddr, mem_mask, true);
-		break;
+		return newaddr;
 
 	case MAIN_RW_STACK:
 		if(newaddr < m_limit_address[slot]) {
 			m_maincpu->trigger_bus_error();
-			return;
+			return NO_RAM;
 		}
 		m_ram.write_interruptible(newaddr, data, mem_mask);
 		m_dev.ram_access(newaddr, mem_mask, true);
-		break;
+		return newaddr;
 
 	case IO:
 		if(newaddr >= m_limit_address[slot]) {
 			m_maincpu->trigger_bus_error();
-			return;
+			return NO_RAM;
 		}
 		m_io.write_interruptible(newaddr, data, mem_mask);
-		break;
+		return NO_RAM;
 
 	case SPECIAL:
 		if(slot >= 4*128) {
@@ -193,10 +193,10 @@ void lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
 			}
 		} else if(newaddr >= m_limit_address[slot]) {
 			m_maincpu->trigger_bus_error();
-			return;
+			return NO_RAM;
 		}
 		m_special_io.write_interruptible(newaddr, data, mem_mask);
-		break;
+		return NO_RAM;
 	}
 }
 
@@ -295,6 +295,7 @@ void lisa_mmu_device::device_start()
 	m_bad_parity.resize(0x200000 / 32, 0);
 	m_bad_parity_count = 0;
 	m_error_address = 0;
+	m_video_parity_timer = timer_alloc(FUNC(lisa_mmu_device::video_parity_check), this);
 
 	save_item(NAME(m_sor));
 	save_item(NAME(m_slr));
@@ -323,6 +324,7 @@ void lisa_mmu_device::device_reset()
 	m_soft_mask = m_hard_mask = true;
 	m_soft_error = m_hard_error = false;
 	update_nmi();
+	m_video_parity_timer->adjust(m_video->frame_period(), 0, m_video->frame_period());
 }
 
 device_memory_interface::space_config_vector lisa_mmu_device::memory_space_config() const
@@ -464,9 +466,12 @@ void lisa_mmu_device::herr_0()
 
 u16 lisa_mmu_device::parity_error_address_r()
 {
-	// Physical A20-A6 in bits 15-1.  Bit 0 flags a video cycle; video
-	// fetches aren't seen here, so it reads 0.
-	return (m_error_address >> 5) & 0xfffe;
+	// The register takes the address of every memory cycle until an error
+	// is latched.  The CPU reading it is in an I/O cycle, so the last
+	// memory cycle was a video fetch.
+	if(!m_soft_error && !m_hard_error)
+		return ((m_video->fetch_address() >> 5) & 0xfffe) | 1;
+	return m_error_address;
 }
 
 void lisa_mmu_device::update_nmi()
@@ -474,46 +479,63 @@ void lisa_mmu_device::update_nmi()
 	m_nmi_cb(m_soft_error || m_hard_error);
 }
 
-void lisa_mmu_device::latch_hard_error()
+// Physical A20-A6 in bits 15-1; bit 0 set for a video cycle.  An error
+// raised by a cycle that isn't a CPU RAM access (DIAG1/DIAG2 on an I/O
+// write) leaves the last video fetch address (inferred).
+void lisa_mmu_device::freeze_error_address(offs_t ram_address)
+{
+	if(m_soft_error || m_hard_error)
+		return;
+	if(ram_address != NO_RAM)
+		m_error_address = (ram_address >> 5) & 0xfffe;
+	else
+		m_error_address = ((m_video->fetch_address() >> 5) & 0xfffe) | 1;
+}
+
+void lisa_mmu_device::latch_soft_error(offs_t ram_address)
+{
+	if(!m_soft_mask && !m_soft_error) {
+		freeze_error_address(ram_address);
+		m_soft_error = true;
+		update_nmi();
+	}
+}
+
+void lisa_mmu_device::latch_hard_error(offs_t ram_address)
 {
 	if(!m_hard_mask && !m_hard_error) {
+		freeze_error_address(ram_address);
 		m_hard_error = true;
 		update_nmi();
 	}
 }
 
-void lisa_mmu_device::write_cycle()
+void lisa_mmu_device::write_cycle(offs_t ram_address)
 {
-	if(m_diag1 && !m_soft_mask && !m_soft_error) {
-		m_soft_error = true;
-		update_nmi();
-	}
+	if(m_diag1)
+		latch_soft_error(ram_address);
 	if(m_diag2)
-		latch_hard_error();
+		latch_hard_error(ram_address);
 }
 
+// Parity is odd, one bit per byte, and only the bytes the access selects
+// are checked (HW manual Sep82 p. 5-8)
 void lisa_mmu_device::ram_access(offs_t address, u16 mem_mask, bool write)
 {
-	// The error address register (F000) takes the address of every
-	// memory cycle until an error is latched, then holds it
-	address &= 0x1ffffe;
-	if(!m_soft_error && !m_hard_error)
-		m_error_address = address;
-
 	if(!m_diag2 && !m_bad_parity_count)
 		return;
 
-	// One parity bit per byte: UDS selects the even byte, LDS the odd one
+	address &= 0x1ffffe;
+	bool bad = false;
 	for(int i = 0; i != 2; i++) {
 		if(!(mem_mask & (i ? 0x00ff : 0xff00)))
 			continue;
 		const u32 byte = address | i;
 		u32 &bits = m_bad_parity[byte >> 5];
 		const u32 bit = 1U << (byte & 31);
-		if(!write) {
-			if(bits & bit)
-				latch_hard_error();
-		} else if(m_diag2) {
+		if(!write)
+			bad = bad || (bits & bit);
+		else if(m_diag2) {
 			if(!(bits & bit)) {
 				bits |= bit;
 				m_bad_parity_count++;
@@ -523,6 +545,28 @@ void lisa_mmu_device::ram_access(offs_t address, u16 mem_mask, bool write)
 			m_bad_parity_count--;
 		}
 	}
+	if(bad)
+		latch_hard_error(address);
+}
+
+// Video fetches are checked too, so a bad byte in the frame buffer is
+// reported every frame until it is rewritten or the error is masked
+// (HW manual Sep82 p. 5-8).  Checked once per frame rather than at the
+// fetch.
+TIMER_CALLBACK_MEMBER(lisa_mmu_device::video_parity_check)
+{
+	if(!m_bad_parity_count || m_hard_mask || m_hard_error)
+		return;
+
+	const u32 start = m_video->frame_start();
+	const u32 end = start + m_video->frame_bytes();
+	for(u32 byte = start; byte < end && byte < 0x200000; byte++)
+		if(m_bad_parity[byte >> 5] & (1U << (byte & 31))) {
+			m_error_address = ((byte >> 5) & 0xfffe) | 1;
+			m_hard_error = true;
+			update_nmi();
+			return;
+		}
 }
 
 void lisa_mmu_device::default_autovectors_map(address_map &map)

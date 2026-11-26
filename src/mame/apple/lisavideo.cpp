@@ -217,9 +217,11 @@ void lisa_video_device::analyze_video_rom()
 
 	u16 max_x = 0, max_y = 0, max_vx = 0, max_vy = 0;
 	u32 time_vsint_start = 0; // Interrupt always ends at start of frame
+	m_frame_words = 0;
 
 	for(unsigned int i = 0; i != m_video_states.size(); i++) {
 		const auto &s = m_video_states[i];
+		m_frame_words = std::max<u32>(s.address + 1, m_frame_words);
 		max_x = std::max(s.x, max_x);
 		max_y = std::max(s.y, max_y);
 		if(s.blank && s.vsync) {
@@ -259,6 +261,21 @@ u32 lisa_video_device::current_state_index() const
 bool lisa_video_device::sn_r()
 {
 	return m_video_states[current_state_index()].sn;
+}
+
+u32 lisa_video_device::frame_start() const
+{
+	return (((m_base & 0x3f) << 14) & ((m_ram.bytes() >> 1) - 1)) << 1;
+}
+
+u32 lisa_video_device::fetch_address() const
+{
+	return frame_start() + (m_video_states[current_state_index()].address << 1);
+}
+
+attotime lisa_video_device::frame_period() const
+{
+	return attotime::from_ticks(m_video_states.size() * 16, clock());
 }
 
 u16 lisa_video_device::status_r()

@@ -29,6 +29,13 @@ public:
 	bool vint_r() { return m_vint_masked; }
 	bool sn_r();
 
+	// RAM byte addresses of the current video fetch and of the frame
+	// buffer, for the memory error logic
+	u32 fetch_address() const;
+	u32 frame_start() const;
+	u32 frame_bytes() const { return m_frame_words * 2; }
+	attotime frame_period() const;
+
 protected:
 	lisa_video_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock);
 
@@ -70,6 +77,7 @@ private:
 
 	int m_max_vx, m_max_vy;
 	u32 m_vsint_start;
+	u32 m_frame_words;
 	emu_timer *m_vint_timer;
 
 	std::vector<video_state> m_video_states;
