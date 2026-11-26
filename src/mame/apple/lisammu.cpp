@@ -337,7 +337,10 @@ u16 lisa_mmu_device::slr_r(offs_t address)
 
 u16 lisa_mmu_device::status_r()
 {
-	return m_video->status_r() | 0x01 | (m_hard_error ? 0x00 : 0x02);
+	// Bit 3 is the bus timeout latch (BUST/, active low): set when AS/
+	// stays asserted for ~56 us with no device answering, cleared by
+	// reading F000.  Every address here answers, so it always reads 1.
+	return m_video->status_r() | 0x01 | (m_hard_error ? 0x00 : 0x02) | 0x08;
 }
 
 void lisa_mmu_device::setup_1()
