@@ -24,7 +24,7 @@ public:
 	template <typename T> void set_cpu(T &&tag) { m_maincpu.set_tag(std::forward<T>(tag)); }
 	template <typename T> void set_video(T &&tag) { m_video.set_tag(std::forward<T>(tag)); }
 
-	auto write_parity_err() { return m_parity_err_cb.bind(); }
+	auto write_nmi() { return m_nmi_cb.bind(); }
 
 	u16 sor_r(offs_t adr);
 	void sor_w(offs_t adr, u16 data, u16 mem_mask);
@@ -69,7 +69,7 @@ private:
 
 	class mmu : public m68000_device::mmu {
 	public:
-		mmu(m68000_device *maincpu, address_space &ram, address_space &io, address_space &special_io, address_space &cpu_space);
+		mmu(lisa_mmu_device &dev, m68000_device *maincpu, address_space &ram, address_space &io, address_space &special_io, address_space &cpu_space);
 		virtual ~mmu() = default;
 
 		u16 read_program(offs_t addr, u16 mem_mask) override;
@@ -86,6 +86,7 @@ private:
 		void setup_entry(int entry, u16 sor, u16 slr);
 
 	private:
+		lisa_mmu_device &m_dev;
 		m68000_device *m_maincpu;
 		address_space &m_a_ram, &m_a_io, &m_a_special_io, &m_a_cpu_space;
 		memory_access<24, 1, 0, ENDIANNESS_BIG>::specific m_ram, m_io, m_special_io, m_cpu_space;
@@ -100,27 +101,32 @@ private:
 
 		inline u16 read(offs_t addr, u16 mem_mask);
 		inline void write(offs_t addr, u16 data, u16 mem_mask);
+		inline void write_access(offs_t addr, u16 data, u16 mem_mask);
 		void recompute_slot();
 	};
 
-	devcb_write_line m_parity_err_cb;
+	devcb_write_line m_nmi_cb;
 
 	required_device<m68000_device> m_maincpu;
 	required_device<lisa_video_device> m_video;
 	std::unique_ptr<mmu> m_mmu;
-	memory_passthrough_handler m_mph_hard_error_write, m_mph_hard_error_read;
 
 	address_space_config m_ram_config, m_io_config, m_special_io_config, m_cpu_space_config;
 
 	std::array<u16, 128*4> m_sor, m_slr;
 
-	u32 m_hard_error_address;
+	std::vector<u32> m_bad_parity; // one bit per RAM byte written with DIAG2 set
+	u32 m_bad_parity_count;
+	u32 m_error_address;
 	u8 m_seg;
-	bool m_hard_error, m_hard_error_mask, m_hard_error_force;
+	bool m_diag1, m_diag2;
+	bool m_soft_mask, m_soft_error, m_hard_mask, m_hard_error;
 
 	void default_autovectors_map(address_map &map);
-	void setup_or_clear_hard_error(offs_t address);
-	void test_hard_error(offs_t address);
+	void ram_access(offs_t address, u16 mem_mask, bool write);
+	void write_cycle();
+	void latch_hard_error();
+	void update_nmi();
 };
 
 DECLARE_DEVICE_TYPE(LISAMMU, lisa_mmu_device)

@@ -11,7 +11,7 @@ DEFINE_DEVICE_TYPE(LISAMMU, lisa_mmu_device, "lisammu", "Lisa MMU")
 lisa_mmu_device::lisa_mmu_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock) :
 	device_t(mconfig, LISAMMU, tag, owner, clock),
 	device_memory_interface(mconfig, *this),
-	m_parity_err_cb(*this),
+	m_nmi_cb(*this),
 	m_maincpu(*this, finder_base::DUMMY_TAG),
 	m_video(*this, finder_base::DUMMY_TAG),
 	m_ram_config("ram", ENDIANNESS_BIG, 16, 24),
@@ -21,7 +21,7 @@ lisa_mmu_device::lisa_mmu_device(const machine_config &mconfig, const char *tag,
 {
 }
 
-lisa_mmu_device::mmu::mmu(m68000_device *maincpu, address_space &ram, address_space &io, address_space &special_io, address_space &cpu_space) : m_maincpu(maincpu), m_a_ram(ram), m_a_io(io), m_a_special_io(special_io), m_a_cpu_space(cpu_space)
+lisa_mmu_device::mmu::mmu(lisa_mmu_device &dev, m68000_device *maincpu, address_space &ram, address_space &io, address_space &special_io, address_space &cpu_space) : m_dev(dev), m_maincpu(maincpu), m_a_ram(ram), m_a_io(io), m_a_special_io(special_io), m_a_cpu_space(cpu_space)
 {
 	ram.specific(m_ram);
 	io.specific(m_io);
@@ -105,6 +105,7 @@ u16 lisa_mmu_device::mmu::read(offs_t addr, u16 mem_mask)
 			m_maincpu->trigger_bus_error();
 			return 0;
 		}
+		m_dev.ram_access(newaddr, mem_mask, false);
 		return m_ram.read_interruptible(newaddr, mem_mask);
 
 	case MAIN_RO_STACK: case MAIN_RW_STACK:
@@ -112,6 +113,7 @@ u16 lisa_mmu_device::mmu::read(offs_t addr, u16 mem_mask)
 			m_maincpu->trigger_bus_error();
 			return 0;
 		}
+		m_dev.ram_access(newaddr, mem_mask, false);
 		return m_ram.read_interruptible(newaddr, mem_mask);
 
 	case IO:
@@ -137,12 +139,17 @@ u16 lisa_mmu_device::mmu::read(offs_t addr, u16 mem_mask)
 
 void lisa_mmu_device::mmu::write(offs_t addr, u16 data, u16 mem_mask)
 {
-
 	u64 cyc = m_maincpu->total_cycles();
 	if(cyc & 3)
 		if(m_maincpu->access_before_time((cyc|3) + 1, cyc))
 			return;
 
+	write_access(addr, data, mem_mask);
+	m_dev.write_cycle();
+}
+
+void lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
+{
 	int slot = m_current_base | ((addr & 0xffffff) >> 17);
  retry:
 	offs_t newaddr = m_base_address[slot] + (addr & 0x01ffff);
@@ -158,6 +165,7 @@ void lisa_mmu_device::mmu::write(offs_t addr, u16 data, u16 mem_mask)
 			return;
 		}
 		m_ram.write_interruptible(newaddr, data, mem_mask);
+		m_dev.ram_access(newaddr, mem_mask, true);
 		break;
 
 	case MAIN_RW_STACK:
@@ -166,6 +174,7 @@ void lisa_mmu_device::mmu::write(offs_t addr, u16 data, u16 mem_mask)
 			return;
 		}
 		m_ram.write_interruptible(newaddr, data, mem_mask);
+		m_dev.ram_access(newaddr, mem_mask, true);
 		break;
 
 	case IO:
@@ -276,17 +285,30 @@ bool lisa_mmu_device::mmu::translate(int spacenum, int intention, offs_t &addres
 
 void lisa_mmu_device::device_start()
 {
-	m_mmu = std::make_unique<mmu>(m_maincpu.target(), space(AS_RAM), space(AS_IO), space(AS_SPECIAL_IO), space(m68000_device::AS_CPU_SPACE));
+	m_mmu = std::make_unique<mmu>(*this, m_maincpu.target(), space(AS_RAM), space(AS_IO), space(AS_SPECIAL_IO), space(m68000_device::AS_CPU_SPACE));
 	m_maincpu->set_current_mmu(m_mmu.get());
 
 	std::fill(m_sor.begin(), m_sor.end(), 0x0000);
 	std::fill(m_slr.begin(), m_slr.end(), 0x0000);
 
+	// Parity bits live in the RAM, so they survive a reset
+	m_bad_parity.resize(0x200000 / 32, 0);
+	m_bad_parity_count = 0;
+	m_error_address = 0;
+
 	save_item(NAME(m_sor));
 	save_item(NAME(m_slr));
+	save_item(NAME(m_bad_parity));
+	save_item(NAME(m_bad_parity_count));
+	save_item(NAME(m_error_address));
+	save_item(NAME(m_diag1));
+	save_item(NAME(m_diag2));
+	save_item(NAME(m_soft_mask));
+	save_item(NAME(m_soft_error));
+	save_item(NAME(m_hard_mask));
+	save_item(NAME(m_hard_error));
 
 	m_seg = 0;
-	m_hard_error_force = false;
 }
 
 void lisa_mmu_device::device_reset()
@@ -294,9 +316,13 @@ void lisa_mmu_device::device_reset()
 	m_mmu->set_setup(true);
 	m_mmu->set_seg(0);
 	m_seg = 0;
-	m_hard_error = false;
-	m_hard_error_mask = true;
-	diag2_0();
+
+	// Reset clears the control latch: DIAG1/DIAG2 off, both error
+	// detectors masked (which also clears their latches)
+	m_diag1 = m_diag2 = false;
+	m_soft_mask = m_hard_mask = true;
+	m_soft_error = m_hard_error = false;
+	update_nmi();
 }
 
 device_memory_interface::space_config_vector lisa_mmu_device::memory_space_config() const
@@ -337,10 +363,11 @@ u16 lisa_mmu_device::slr_r(offs_t address)
 
 u16 lisa_mmu_device::status_r()
 {
+	// Bits 0 and 1 are the soft and hard error latches, active low.
 	// Bit 3 is the bus timeout latch (BUST/, active low): set when AS/
 	// stays asserted for ~56 us with no device answering, cleared by
-	// reading F000.  Every address here answers, so it always reads 1.
-	return m_video->status_r() | 0x01 | (m_hard_error ? 0x00 : 0x02) | 0x08;
+	// reading F000.  Every access completes here, so it always reads 1.
+	return m_video->status_r() | (m_soft_error ? 0x00 : 0x01) | (m_hard_error ? 0x00 : 0x02) | 0x08;
 }
 
 void lisa_mmu_device::setup_1()
@@ -377,95 +404,123 @@ void lisa_mmu_device::seg2_0()
 	m_mmu->set_seg(m_seg);
 }
 
+// Error logic (CPU schematic 050-4009 sheets 3 and 5).  DIAG1 and
+// DIAG2 pull SFER/ and HDER/ low on every CPU write cycle, memory or
+// I/O.  A memory board also pulls HDER/ low when it reads a byte with
+// bad parity, and it stores bad parity for every byte written while
+// DIAG2 is set.  SFER/ and HDER/ set the LS279 soft and hard error
+// latches unless their mask bit holds them clear, and either latch
+// raises the level 7 interrupt.
+
 void lisa_mmu_device::diag1_0()
 {
-	logerror("force soft error off\n");
+	m_diag1 = false;
 }
 
 void lisa_mmu_device::diag1_1()
 {
-	logerror("force soft error on\n");
+	m_diag1 = true;
 }
 
 void lisa_mmu_device::diag2_0()
 {
-	if(!m_hard_error_force)
-		return;
-
-	if(m_hard_error_address == 0xffffffff)
-		m_mph_hard_error_write.remove();
-
-	m_hard_error_force = false;
-	logerror("force hard error off\n");
+	m_diag2 = false;
 }
 
 void lisa_mmu_device::diag2_1()
 {
-	if(m_hard_error_force)
-		return;
+	m_diag2 = true;
+}
 
-	m_hard_error_force = true;
-	m_hard_error_address = 0xffffffff;
-	m_mph_hard_error_write = space(AS_RAM).install_write_tap(0, 0x1fffff, "parity write", [this](offs_t address, u16 &, u16) { setup_or_clear_hard_error(address); });
-	logerror("force hard error on\n");
+// SFMSK/ asserted: soft error detection off, latch cleared
+void lisa_mmu_device::serr_1()
+{
+	m_soft_mask = true;
+	if(m_soft_error) {
+		m_soft_error = false;
+		update_nmi();
+	}
 }
 
 void lisa_mmu_device::serr_0()
 {
-	logerror("soft error off\n");
+	m_soft_mask = false;
 }
 
-void lisa_mmu_device::serr_1()
+// HDMSK/ asserted: hard error detection off, latch cleared
+void lisa_mmu_device::herr_1()
 {
-	logerror("soft error on\n");
+	m_hard_mask = true;
+	if(m_hard_error) {
+		m_hard_error = false;
+		update_nmi();
+	}
 }
 
 void lisa_mmu_device::herr_0()
 {
-	m_hard_error = false;
-	m_hard_error_mask = false;
-	logerror("hard error off\n");
-}
-
-void lisa_mmu_device::herr_1()
-{
-	if(m_hard_error) {
-		m_hard_error = false;
-		m_parity_err_cb(false);
-	}
-	m_hard_error_mask = true;
-	logerror("hard error on\n");
+	m_hard_mask = false;
 }
 
 u16 lisa_mmu_device::parity_error_address_r()
 {
-	return m_hard_error_address >> 5;
+	// Physical A20-A6 in bits 15-1.  Bit 0 flags a video cycle; video
+	// fetches aren't seen here, so it reads 0.
+	return (m_error_address >> 5) & 0xfffe;
 }
 
-void lisa_mmu_device::setup_or_clear_hard_error(offs_t address)
+void lisa_mmu_device::update_nmi()
 {
-	if(m_hard_error_force) {
-		logerror("hard error setup for address %06x\n", address);
-		if(m_hard_error_address == 0xffffffff)
-			m_mph_hard_error_read = space(AS_RAM).install_read_tap(0, 0x1fffff, "parity read", [this](offs_t address, u16 &, u16) { test_hard_error(address); });
-		m_hard_error_address = address;
+	m_nmi_cb(m_soft_error || m_hard_error);
+}
 
-	} else if(address == m_hard_error_address) {
-		logerror("hard error clear for address %06x\n", address);
-		m_hard_error_address = 0xffffffff;
-		m_mph_hard_error_write.remove();
-		m_mph_hard_error_read.remove();
+void lisa_mmu_device::latch_hard_error()
+{
+	if(!m_hard_mask && !m_hard_error) {
+		m_hard_error = true;
+		update_nmi();
 	}
 }
 
-void lisa_mmu_device::test_hard_error(offs_t address)
+void lisa_mmu_device::write_cycle()
 {
-	if(address == m_hard_error_address) {
-		logerror("hard error trigger for address %06x\n", address);
+	if(m_diag1 && !m_soft_mask && !m_soft_error) {
+		m_soft_error = true;
+		update_nmi();
+	}
+	if(m_diag2)
+		latch_hard_error();
+}
 
-		if(!m_hard_error_mask) {
-			m_hard_error = true;
-			m_parity_err_cb(true);
+void lisa_mmu_device::ram_access(offs_t address, u16 mem_mask, bool write)
+{
+	// The error address register (F000) takes the address of every
+	// memory cycle until an error is latched, then holds it
+	address &= 0x1ffffe;
+	if(!m_soft_error && !m_hard_error)
+		m_error_address = address;
+
+	if(!m_diag2 && !m_bad_parity_count)
+		return;
+
+	// One parity bit per byte: UDS selects the even byte, LDS the odd one
+	for(int i = 0; i != 2; i++) {
+		if(!(mem_mask & (i ? 0x00ff : 0xff00)))
+			continue;
+		const u32 byte = address | i;
+		u32 &bits = m_bad_parity[byte >> 5];
+		const u32 bit = 1U << (byte & 31);
+		if(!write) {
+			if(bits & bit)
+				latch_hard_error();
+		} else if(m_diag2) {
+			if(!(bits & bit)) {
+				bits |= bit;
+				m_bad_parity_count++;
+			}
+		} else if(bits & bit) {
+			bits &= ~bit;
+			m_bad_parity_count--;
 		}
 	}
 }

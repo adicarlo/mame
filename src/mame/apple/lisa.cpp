@@ -194,7 +194,7 @@ void lisa_state::lisa(machine_config &config)
 	m_mmu->set_addrmap(lisa_mmu_device::AS_SPECIAL_IO, &lisa_state::lisa_special_io_map);
 	m_mmu->set_cpu(m_maincpu);
 	m_mmu->set_video(m_video);
-	m_mmu->write_parity_err().set_inputline(m_maincpu, INPUT_LINE_NMI);
+	m_mmu->write_nmi().set_inputline(m_maincpu, INPUT_LINE_NMI);
 
 	COP421(config, m_iocop, 3.93216_MHz_XTAL); // U9F (I/O board)
 	m_iocop->set_config(COP400_CKI_DIVISOR_16, COP400_CKO_OSCILLATOR_OUTPUT, true);
