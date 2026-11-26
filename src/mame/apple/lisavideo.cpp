@@ -198,7 +198,11 @@ void lisa_video_device::analyze_video_rom()
 		if(value & 0x04)
 			address ++;
 
-		if(value & 0x08)   // Zero address (end of frame)
+		// Zero address (end of frame).  The CPU board ANDs a PROM output
+		// with VA8 before registering it (U4A, CPU schematic 050-4009
+		// sheet 5).  Gating this bit that way gives the 379-line, 60 Hz
+		// frame the hardware manual documents; ungated it would be 371.
+		if((value & 0x08) && (address & 0x80))
 			break;
 
 		if(value & 0x01) { // Zero counter (end of line)
