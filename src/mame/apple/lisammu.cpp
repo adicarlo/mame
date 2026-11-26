@@ -147,11 +147,14 @@ void lisa_mmu_device::mmu::write(offs_t addr, u16 data, u16 mem_mask)
 		if(m_maincpu->access_before_time((cyc|3) + 1, cyc))
 			return;
 
-	m_dev.write_cycle(write_access(addr, data, mem_mask));
+	// DIAG1/DIAG2 force their error from the start of the cycle, before a
+	// write to the control latch can change them
+	const bool diag1 = m_dev.m_diag1, diag2 = m_dev.m_diag2;
+	write_access(addr, data, mem_mask);
+	m_dev.write_cycle(diag1 || m_dev.m_diag1, diag2 || m_dev.m_diag2);
 }
 
-// Returns the RAM address written, or NO_RAM for any other cycle
-offs_t lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
+void lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
 {
 	int slot = m_current_base | ((addr & 0xffffff) >> 17);
  retry:
@@ -160,34 +163,34 @@ offs_t lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
 	case INVALID: case MAIN_RO: case MAIN_RO_STACK:
 	default:
 		m_maincpu->trigger_bus_error();
-		return NO_RAM;
+		return;
 
 	case MAIN_RW:
 		if(newaddr >= m_limit_address[slot]) {
 			m_maincpu->trigger_bus_error();
-			return NO_RAM;
+			return;
 		}
 		m_ram.write_interruptible(newaddr, data, mem_mask);
 		m_dev.ram_access(newaddr, mem_mask, true);
-		return newaddr;
+		return;
 
 	case MAIN_RW_STACK:
 		if(newaddr < m_limit_address[slot]) {
 			m_maincpu->trigger_bus_error();
-			return NO_RAM;
+			return;
 		}
 		m_ram.write_interruptible(newaddr, data, mem_mask);
 		m_dev.ram_access(newaddr, mem_mask, true);
-		return newaddr;
+		return;
 
 	case IO:
 		if(newaddr >= m_limit_address[slot]) {
 			m_maincpu->trigger_bus_error();
-			return NO_RAM;
+			return;
 		}
 		m_maincpu->access_after_delay(1); // late DTACK, as for reads
 		m_io.write_interruptible(newaddr, data, mem_mask);
-		return NO_RAM;
+		return;
 
 	case SPECIAL:
 		if(slot >= 4*128) {
@@ -197,10 +200,10 @@ offs_t lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
 			}
 		} else if(newaddr >= m_limit_address[slot]) {
 			m_maincpu->trigger_bus_error();
-			return NO_RAM;
+			return;
 		}
 		m_special_io.write_interruptible(newaddr, data, mem_mask);
-		return NO_RAM;
+		break;
 	}
 }
 
@@ -474,7 +477,7 @@ u16 lisa_mmu_device::parity_error_address_r()
 	// is latched.  The CPU reading it is in an I/O cycle, so the last
 	// memory cycle was a video fetch.
 	if(!m_soft_error && !m_hard_error)
-		return ((m_video->fetch_address() >> 5) & 0xfffe) | 1;
+		return video_error_address();
 	return m_error_address;
 }
 
@@ -483,43 +486,46 @@ void lisa_mmu_device::update_nmi()
 	m_nmi_cb(m_soft_error || m_hard_error);
 }
 
-// Physical A20-A6 in bits 15-1; bit 0 set for a video cycle.  An error
-// raised by a cycle that isn't a CPU RAM access (DIAG1/DIAG2 on an I/O
-// write) leaves the last video fetch address (inferred).
-void lisa_mmu_device::freeze_error_address(offs_t ram_address)
+// The error address register holds physical A20-A6 in bits 15-1 and
+// sets bit 0 for a video cycle.  It is clocked by CAS ANDed with both
+// error latches (CPU schematic sheet 3 C-2), so it stops at the first
+// error.
+u16 lisa_mmu_device::video_error_address() const
 {
-	if(m_soft_error || m_hard_error)
-		return;
-	if(ram_address != NO_RAM)
-		m_error_address = (ram_address >> 5) & 0xfffe;
-	else
-		m_error_address = ((m_video->fetch_address() >> 5) & 0xfffe) | 1;
+	return ((m_video->fetch_address() >> 5) & 0xfffe) | 1;
 }
 
-void lisa_mmu_device::latch_soft_error(offs_t ram_address)
+void lisa_mmu_device::latch_soft_error(u16 error_address)
 {
 	if(!m_soft_mask && !m_soft_error) {
-		freeze_error_address(ram_address);
+		if(!m_hard_error)
+			m_error_address = error_address;
 		m_soft_error = true;
 		update_nmi();
 	}
 }
 
-void lisa_mmu_device::latch_hard_error(offs_t ram_address)
+void lisa_mmu_device::latch_hard_error(u16 error_address)
 {
 	if(!m_hard_mask && !m_hard_error) {
-		freeze_error_address(ram_address);
+		if(!m_soft_error)
+			m_error_address = error_address;
 		m_hard_error = true;
 		update_nmi();
 	}
 }
 
-void lisa_mmu_device::write_cycle(offs_t ram_address)
+// A forced error is raised when the CPU slot of the write starts (CPUCI),
+// before that slot's CAS at T3 can clock the address register, so the
+// register keeps the address of the video fetch before it (inferred from
+// the sheet 2 timing; LisaTest only reads the register after parity
+// errors).
+void lisa_mmu_device::write_cycle(bool diag1, bool diag2)
 {
-	if(m_diag1)
-		latch_soft_error(ram_address);
-	if(m_diag2)
-		latch_hard_error(ram_address);
+	if(diag1)
+		latch_soft_error(video_error_address());
+	if(diag2)
+		latch_hard_error(video_error_address());
 }
 
 // Parity is odd, one bit per byte, and only the bytes the access selects
@@ -549,8 +555,10 @@ void lisa_mmu_device::ram_access(offs_t address, u16 mem_mask, bool write)
 			m_bad_parity_count--;
 		}
 	}
+	// The memory board reports bad parity after CAS, so the register
+	// holds this cycle's address
 	if(bad)
-		latch_hard_error(address);
+		latch_hard_error((address >> 5) & 0xfffe);
 }
 
 // Video fetches are checked too, so a bad byte in the frame buffer is

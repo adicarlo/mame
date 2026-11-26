@@ -66,7 +66,6 @@ private:
 	};
 
 	static const u8 mode_table[16];
-	static constexpr offs_t NO_RAM = ~offs_t(0);
 
 	class mmu : public m68000_device::mmu {
 	public:
@@ -102,7 +101,7 @@ private:
 
 		inline u16 read(offs_t addr, u16 mem_mask);
 		inline void write(offs_t addr, u16 data, u16 mem_mask);
-		inline offs_t write_access(offs_t addr, u16 data, u16 mem_mask);
+		inline void write_access(offs_t addr, u16 data, u16 mem_mask);
 		void recompute_slot();
 	};
 
@@ -126,10 +125,10 @@ private:
 
 	void default_autovectors_map(address_map &map);
 	void ram_access(offs_t address, u16 mem_mask, bool write);
-	void write_cycle(offs_t ram_address);
-	void freeze_error_address(offs_t ram_address);
-	void latch_soft_error(offs_t ram_address);
-	void latch_hard_error(offs_t ram_address);
+	void write_cycle(bool diag1, bool diag2);
+	u16 video_error_address() const;
+	void latch_soft_error(u16 error_address);
+	void latch_hard_error(u16 error_address);
 	void update_nmi();
 	TIMER_CALLBACK_MEMBER(video_parity_check);
 };
