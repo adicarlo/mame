@@ -130,10 +130,12 @@ void lisa_state::lisa_io_map(address_map &map)
 
 	map(0x00c000, 0x00c7ff).rw(m_fdc, FUNC(lisa_base_fdc_device::ram_r), FUNC(lisa_base_fdc_device::ram_w)).umask16(0x00ff);
 
-	map(0x00d241, 0x00d241).rw(m_scc, FUNC(z80scc_device::cb_r), FUNC(z80scc_device::cb_w));
-	map(0x00d243, 0x00d243).rw(m_scc, FUNC(z80scc_device::ca_r), FUNC(z80scc_device::ca_w));
-	map(0x00d245, 0x00d245).rw(m_scc, FUNC(z80scc_device::db_r), FUNC(z80scc_device::db_w));
-	map(0x00d247, 0x00d247).rw(m_scc, FUNC(z80scc_device::da_r), FUNC(z80scc_device::da_w));
+	// The I/O board selects the SCC for all of D200-D3FF (A9 in the D000 block)
+	// and wires only A1 (A/B) and A2 (D/C), so it repeats every 8 bytes
+	map(0x00d201, 0x00d201).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::cb_r), FUNC(z80scc_device::cb_w));
+	map(0x00d203, 0x00d203).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::ca_r), FUNC(z80scc_device::ca_w));
+	map(0x00d205, 0x00d205).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::db_r), FUNC(z80scc_device::db_w));
+	map(0x00d207, 0x00d207).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::da_r), FUNC(z80scc_device::da_w));
 
 	map(0x00d901, 0x00d901)
 		//.before_time(m_maincpu, FUNC(m68000_device::vpa_sync))
