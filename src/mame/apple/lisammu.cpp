@@ -121,6 +121,9 @@ u16 lisa_mmu_device::mmu::read(offs_t addr, u16 mem_mask)
 			m_maincpu->trigger_bus_error();
 			return 0;
 		}
+		// I/O cycles get DTACK one clock late: IOCY only enables the
+		// decode after a further flop (U3A, CPU schematic sheet 5 A-2)
+		m_maincpu->access_after_delay(1);
 		return m_io.read_interruptible(newaddr, mem_mask);
 
 	case SPECIAL:
@@ -182,6 +185,7 @@ offs_t lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
 			m_maincpu->trigger_bus_error();
 			return NO_RAM;
 		}
+		m_maincpu->access_after_delay(1); // late DTACK, as for reads
 		m_io.write_interruptible(newaddr, data, mem_mask);
 		return NO_RAM;
 
