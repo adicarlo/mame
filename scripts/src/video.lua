@@ -127,6 +127,32 @@ end
 
 --------------------------------------------------
 --
+--@src/devices/video/axell_ag2.h,VIDEOS["AXELL_AG2"] = true
+--------------------------------------------------
+
+if VIDEOS["AXELL_AG2"] then
+	files {
+		MAME_DIR .. "src/devices/video/axell_ag2.cpp",
+		MAME_DIR .. "src/devices/video/axell_ag2.h",
+		MAME_DIR .. "src/devices/video/axell_ag2_rm1.cpp",
+		MAME_DIR .. "src/devices/video/axell_ag2_rm1.h",
+	}
+end
+
+--------------------------------------------------
+--
+--@src/devices/video/axell_decomp.h,VIDEOS["AXELL_DECOMP"] = true
+--------------------------------------------------
+
+if VIDEOS["AXELL_DECOMP"] then
+	files {
+		MAME_DIR .. "src/devices/video/axell_decomp.cpp",
+		MAME_DIR .. "src/devices/video/axell_decomp.h",
+	}
+end
+
+--------------------------------------------------
+--
 --@src/devices/video/bt431.h,VIDEOS["BT431"] = true
 --------------------------------------------------
 
@@ -1413,6 +1439,18 @@ if VIDEOS["PCF2100"] then
 	files {
 		MAME_DIR .. "src/devices/video/pcf2100.cpp",
 		MAME_DIR .. "src/devices/video/pcf2100.h",
+	}
+end
+
+--------------------------------------------------
+--
+--@src/devices/video/powervr250.h,VIDEOS["POWERVR250"] = true
+--------------------------------------------------
+
+if VIDEOS["POWERVR250"] then
+	files {
+		MAME_DIR .. "src/devices/video/powervr250.cpp",
+		MAME_DIR .. "src/devices/video/powervr250.h",
 	}
 end
 

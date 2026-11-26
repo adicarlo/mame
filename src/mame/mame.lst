@@ -17638,6 +17638,7 @@ brkthruj
 brkthrut
 brkthruu
 darwin
+evolution
 forcebrk
 
 @source:dataeast/btime.cpp
@@ -18590,6 +18591,7 @@ mjfriday
 mjreach
 mjreacha
 mjreachbl
+mjreachbl2
 mjreachp2
 mjtkp2
 mjwitomo
@@ -18816,6 +18818,7 @@ phatt
 procuss
 proteus1
 proteusxr
+proteusxrpl
 vintkeys
 
 @source:ensoniq/enmirage.cpp
@@ -21030,6 +21033,12 @@ z22
 @source:heathzenith/z29.cpp
 z29
 
+@source:heathzenith/z39.cpp
+z39
+
+@source:heathzenith/z49.cpp
+z49
+
 @source:heathzenith/z100.cpp
 z100
 
@@ -21731,6 +21740,7 @@ fb2010a
 feverch
 fevercha
 feverchb
+feverchc
 feverchtw
 feverchw4
 fl7_3121
@@ -21783,6 +21793,14 @@ fl7_500_gs05
 fl7_500_gs06
 fl7_500_gs07
 fl7_500_gs08
+fl7_500_gs09
+fl7_500_gs10
+fl7_500_gs11
+fl7_500_gs12
+fl7_500_gs13
+fl7_500_gs14
+fl7_500_gs15
+fl7_500_gs16
 fl7_1000
 fl7_2000
 fl7_2k16
@@ -21914,6 +21932,7 @@ ns8linewd
 packsystem
 pkrmast
 pkrmasta
+pkrmastc
 pokonl97
 reelmagic
 reelmagica
@@ -22182,6 +22201,7 @@ lhfy
 lhtb
 lhzb3in1
 lhzbgqb
+lhzbgqb104cn
 mghammer
 mjzhizun
 qhzb
@@ -30606,6 +30626,22 @@ fun4a
 csdaruma
 lnumbers
 
+@source:misc/banpresto_tomy_h8s.cpp
+anpanmct
+cmcwa
+cscaoysd
+dbzbgck
+dbzbgck10
+dchopper
+gkitarou
+gyakyu
+kghmytda
+pmsgk
+satoyama
+youkai
+yujogs
+zoids
+
 @source:misc/beaminv.cpp
 beaminv
 ctainv
@@ -32091,6 +32127,7 @@ goldnpkg
 goldnpkh
 goldnpki
 goldnpkr
+goldpnew
 goodluck
 gp_jpn22
 gp_ped42_70
@@ -33744,6 +33781,7 @@ baibians
 btlfront
 cjmx
 crzclass
+ddzzcs
 hzniqiu
 kxddz
 xbnz
@@ -35985,6 +36023,7 @@ mousekid
 pp6578
 soulbird
 ts_handy11
+tvdriv17
 vsmaxx15
 vsmaxx25
 
@@ -36159,6 +36198,7 @@ hkb502
 hkb502a
 jl1810gr
 jl2050
+jl2350
 jl2377
 jl2950
 lexi30
@@ -36170,6 +36210,7 @@ lxccplan
 lxcmc250
 lxcmcy
 lxcmcyba
+lxcmcybao
 lxcmcybt
 lxcmcyco
 lxcmcycr
@@ -40208,7 +40249,6 @@ tropfrt
 powerbals
 sslam
 sslama
-sslamb
 
 @source:plexus/p20.cpp
 p20
@@ -40917,6 +40957,7 @@ jinsanse
 abaozang
 laiziddz
 qczl
+qqddz
 zduoxing
 
 @source:sealy/sealy_fr.cpp
@@ -40932,6 +40973,7 @@ sandaha
 @source:sealy/sealy_z80.cpp
 bbddz
 bbddza
+clonek2
 ddz1
 ddz2
 ddz2a
@@ -41218,6 +41260,8 @@ mypacgld
 mysf2
 mysinv
 mysinva
+pxp3
+pxp3a
 reactmd
 sarc110
 sarc110a
@@ -43966,22 +44010,6 @@ aws220
 @source:skeleton/ax20.cpp
 ax20
 
-@source:skeleton/banpresto_tomy_h8s.cpp
-anpanmct
-cmcwa
-cscaoysd
-dbzbgck
-dbzbgck10
-dchopper
-gkitarou
-gyakyu
-kghmytda
-pmsgk
-satoyama
-youkai
-yujogs
-zoids
-
 @source:skeleton/basf7100.cpp
 basf7120
 
@@ -44250,6 +44278,9 @@ fs3216
 @source:skeleton/ft68m.cpp
 ft68m
 
+@source:skeleton/futsala.cpp
+futsala
+
 @source:skeleton/galpro.cpp
 galpro
 
@@ -44287,6 +44318,7 @@ hazl1552
 hazl1420
 
 @source:skeleton/highway_m68k.cpp
+dlzc
 tzfx
 
 @source:skeleton/hkcastle.cpp
@@ -45395,6 +45427,7 @@ ikari3
 ikari3j
 ikari3k
 ikari3u
+ikari3ua
 ikari3w
 pow
 powa
@@ -48586,6 +48619,7 @@ discpal
 disppal
 lexiseal
 lexizeus
+maxicybr
 pokermor
 pokmax20
 vgcaplet
@@ -48828,7 +48862,7 @@ epo_pabj
 epo_sskj
 epo_ssk2
 
-@source:tvgames/xavix_2000.cpp
+@source:tvgames/xavix_xavix2000.cpp
 ban_omt
 ban_onep
 drgqst
@@ -48848,7 +48882,7 @@ ttv_mx
 ttv_sw
 ttv_swj
 
-@source:tvgames/xavix_2002.cpp
+@source:tvgames/xavix_superxavix.cpp
 anpanmdx
 apmj2009
 ban_bkgj
@@ -48870,6 +48904,7 @@ epo_kabj
 epo_ntpj
 epo_rgfj
 epo_tfit
+hkdraw
 maxheart
 mrangbat
 ndpbj

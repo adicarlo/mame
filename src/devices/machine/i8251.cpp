@@ -99,6 +99,8 @@ void i8251_device::device_start()
 	m_command = 0;
 	m_mode_byte = 0;
 	m_delayed_tx_en = false;
+	m_delayed_txrdy = false;
+	m_rxrdy = false;
 
 	m_rxc_count = 0;
 	m_txc_count = 0;
@@ -116,6 +118,8 @@ void i8251_device::device_start()
 	m_rxd_bits = 0;
 	m_data_bits_count = 0;
 
+	m_txrdy_delay_timer = timer_alloc(FUNC(i8251_device::txrdy_delayed_assert), this);
+
 	// register for savestates
 	save_item(NAME(m_flags));
 	save_item(NAME(m_sync_byte_count));
@@ -125,6 +129,8 @@ void i8251_device::device_start()
 	save_item(NAME(m_command));
 	save_item(NAME(m_mode_byte));
 	save_item(NAME(m_delayed_tx_en));
+	save_item(NAME(m_delayed_txrdy));
+	save_item(NAME(m_rxrdy));
 
 	save_item(NAME(m_cts));
 	save_item(NAME(m_dsr));
@@ -156,7 +162,17 @@ void i8251_device::device_start()
 
 void i8251_device::update_rx_ready()
 {
-	m_rxrdy_handler(rxrdy_r());
+	// Repeat a 1, but send a 0 only when the level falls.  A consumer that
+	// defers its input (input_merger, rst_pos_buffer) applies calls in time
+	// order, and a CPU access can run before an earlier-timed receive: a
+	// repeated 0 would land after the receive's 1 and lose its interrupt.
+	// A data read's 0 can still land late; the next repeated 1 restores it.
+	bool const state = rxrdy_r();
+	if (state || m_rxrdy)
+	{
+		m_rxrdy = state;
+		m_rxrdy_handler(state);
+	}
 }
 
 void v5x_scu_device::update_rx_ready()
@@ -412,7 +428,11 @@ void i8251_device::start_tx()
 	LOG("start_tx %02x\n", m_tx_data);
 	transmit_register_setup(m_tx_data);
 	m_status &= ~I8251_STATUS_TX_EMPTY;
-	m_status |= I8251_STATUS_TX_READY;
+
+	if (m_txrdy_delay_timer->enabled() && !m_txrdy_delay_timer->expire().is_never())
+		m_delayed_txrdy = true;
+	else
+		m_status |= I8251_STATUS_TX_READY;
 }
 
 
@@ -564,10 +584,15 @@ void i8251_device::device_reset()
 
 	/* update tx empty pin output */
 	update_tx_empty();
-	/* update rx ready pin output */
+	/* update rx ready pin output; RESET forces it low, so send the low
+	   whatever was last driven */
+	m_rxrdy = true;
 	update_rx_ready();
 	/* update tx ready pin output */
 	update_tx_ready();
+
+	m_delayed_txrdy = false;
+	m_txrdy_delay_timer->adjust(attotime::never);
 }
 
 
@@ -771,6 +796,9 @@ void i8251_device::mode_w(uint8_t data)
 	receive_register_reset();
 	m_rx_start_check = false;
 	m_txc_count = 0;
+
+	// write recovery time for mode init is 6 cycles
+	m_txrdy_delay_timer->adjust(attotime::from_ticks(6, clock()));
 }
 
 void i8251_device::sync1_w(uint8_t data)
@@ -791,6 +819,10 @@ void i8251_device::sync2_w(uint8_t data)
 
 void i8251_device::control_w(uint8_t data)
 {
+	// delay next assertion of TxRDY for write recovery time
+	// 8 cycles for async mode, 16 cycles for sync mode
+	m_txrdy_delay_timer->adjust(attotime::from_ticks((m_sync_byte_count > 0) ? 16 : 8, clock()));
+
 	if (m_flags == I8251_NEXT_SYNC1)
 		sync1_w(data);
 	else if (m_flags == I8251_NEXT_SYNC2)
@@ -833,8 +865,13 @@ void i8251_device::data_w(uint8_t data)
 
 	/* writing clears */
 	m_status &=~I8251_STATUS_TX_READY;
+	m_delayed_txrdy = false;
 	LOGSTAT("8251: status cleared TX_READY by data_w\n");
 	update_tx_ready();
+
+	// delay next assertion of TxRDY for write recovery time
+	// 8 cycles for async mode, 16 cycles for sync mode
+	m_txrdy_delay_timer->adjust(attotime::from_ticks((m_sync_byte_count > 0) ? 16 : 8, clock()));
 
 	// Store state of tx enable when writing to DB buffer
 	m_delayed_tx_en = is_tx_enabled();
@@ -931,7 +968,8 @@ void i8251_device::write_cts(int state)
 
 void i8251_device::write_dsr(int state)
 {
-	m_dsr = !state;
+	// DSR is active low
+	m_dsr = state ? 0 : 1;
 }
 
 void i8251_device::write_rxc(int state)
@@ -987,6 +1025,16 @@ int i8251_device::rxrdy_r()
 		return 0;
 
 	return (m_status & I8251_STATUS_RX_READY) != 0;
+}
+
+TIMER_CALLBACK_MEMBER(i8251_device::txrdy_delayed_assert)
+{
+	if (!m_delayed_txrdy)
+		return;
+	
+	m_status |= I8251_STATUS_TX_READY;
+	update_tx_ready();
+	m_delayed_txrdy = false;
 }
 
 void v5x_scu_device::device_start()
