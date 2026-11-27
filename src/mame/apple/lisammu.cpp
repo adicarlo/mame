@@ -86,8 +86,10 @@ void lisa_mmu_device::mmu::write_data(offs_t addr, u16 data, u16 mem_mask)
 
 u16 lisa_mmu_device::mmu::read(offs_t addr, u16 mem_mask)
 {
+	// A VPA cycle deferred to the next timeslice comes back here: it has
+	// already started, so it doesn't wait for a memory slot again
 	u64 cyc = m_maincpu->total_cycles();
-	if(cyc & 3)
+	if((cyc & 3) && cyc > m_dev.m_vpa_time)
 		if(m_maincpu->access_before_time((cyc|3) + 1, cyc))
 			return 0;
 
@@ -121,6 +123,13 @@ u16 lisa_mmu_device::mmu::read(offs_t addr, u16 mem_mask)
 			m_maincpu->trigger_bus_error();
 			return 0;
 		}
+		if(m_io.lookup_read_word_flags(newaddr, mem_mask) & VPA) {
+			if(m_dev.vpa_wait(newaddr))
+				return 0;
+			const u16 data = m_io.read_interruptible(newaddr, mem_mask);
+			m_maincpu->access_after_delay(m_maincpu->vpa_after(newaddr));
+			return data;
+		}
 		// I/O cycles get DTACK one clock late: IOCY only enables the
 		// decode after a further flop (U3A, CPU schematic sheet 5 A-2)
 		m_maincpu->access_after_delay(1);
@@ -143,7 +152,7 @@ u16 lisa_mmu_device::mmu::read(offs_t addr, u16 mem_mask)
 void lisa_mmu_device::mmu::write(offs_t addr, u16 data, u16 mem_mask)
 {
 	u64 cyc = m_maincpu->total_cycles();
-	if(cyc & 3)
+	if((cyc & 3) && cyc > m_dev.m_vpa_time)
 		if(m_maincpu->access_before_time((cyc|3) + 1, cyc))
 			return;
 
@@ -188,6 +197,13 @@ void lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
 			m_maincpu->trigger_bus_error();
 			return;
 		}
+		if(m_io.lookup_write_word_flags(newaddr, mem_mask) & VPA) {
+			if(m_dev.vpa_wait(newaddr))
+				return;
+			m_io.write_interruptible(newaddr, data, mem_mask);
+			m_maincpu->access_after_delay(m_maincpu->vpa_after(newaddr));
+			return;
+		}
 		m_maincpu->access_after_delay(1); // late DTACK, as for reads
 		m_io.write_interruptible(newaddr, data, mem_mask);
 		return;
@@ -209,6 +225,13 @@ void lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
 
 u16 lisa_mmu_device::mmu::read_cpu(offs_t addr, u16 mem_mask)
 {
+	if(m_cpu_space.lookup_read_word_flags(addr, mem_mask) & VPA) {
+		if(m_dev.vpa_wait(addr))
+			return 0;
+		const u16 data = m_cpu_space.read_interruptible(addr, mem_mask);
+		m_maincpu->access_after_delay(m_maincpu->vpa_after(addr));
+		return data;
+	}
 	return m_cpu_space.read_interruptible(addr, mem_mask);
 }
 
@@ -310,6 +333,7 @@ void lisa_mmu_device::device_start()
 	save_item(NAME(m_bad_parity_count));
 	save_item(NAME(m_error_address));
 	save_item(NAME(m_bus_timeout));
+	save_item(NAME(m_vpa_time));
 	save_item(NAME(m_diag1));
 	save_item(NAME(m_diag2));
 	save_item(NAME(m_soft_mask));
@@ -332,6 +356,7 @@ void lisa_mmu_device::device_reset()
 	m_soft_mask = m_hard_mask = true;
 	m_soft_error = m_hard_error = false;
 	m_bus_timeout = false;
+	m_vpa_time = 0;
 	update_nmi();
 	m_video_parity_timer->adjust(m_video->frame_period(), 0, m_video->frame_period());
 }
@@ -384,6 +409,15 @@ u16 lisa_mmu_device::status_r()
 // A device withheld DTACK: the 556 timer on AS/ (CPU schematic sheet 3
 // D-4, 5.1K and 0.01 uF, about 56 us) sets BUST/, which raises BERR and
 // latches status bit 3
+// Wait for the E edge a VPA/ cycle synchronises to.  Remember it, so the
+// access can resume there if it has to be redone in the next timeslice.
+bool lisa_mmu_device::vpa_wait(offs_t address)
+{
+	const u64 cyc = m_maincpu->total_cycles();
+	m_vpa_time = m_maincpu->vpa_sync(address, cyc);
+	return m_maincpu->access_before_time(m_vpa_time, cyc);
+}
+
 void lisa_mmu_device::bus_timeout()
 {
 	m_maincpu->access_after_delay(attotime::from_usec(56).as_ticks(m_maincpu->clock()));
@@ -595,14 +629,17 @@ TIMER_CALLBACK_MEMBER(lisa_mmu_device::video_parity_check)
 		}
 }
 
+// The CPU board answers interrupt acknowledge with VPA/ for levels 1, 2, 6
+// and 7 (U4F, CPU schematic 050-4009 sheet 3).  Levels 3-5 go out to the
+// expansion slots as IAK2-IAK0, for the card to answer.
 void lisa_mmu_device::default_autovectors_map(address_map &map)
 {
 	offs_t mask = 0xffffff - 0xf;
-	map(mask + 0x3, mask + 0x3)/*.before_time(*this, FUNC(m68000_device::vpa_sync)).after_delay(*this, FUNC(m68000_device::vpa_after))*/.lr8(NAME([] () -> u8 { return m68000_device::autovector(1); }));
-	map(mask + 0x5, mask + 0x5)/*.before_time(*this, FUNC(m68000_device::vpa_sync)).after_delay(*this, FUNC(m68000_device::vpa_after))*/.lr8(NAME([] () -> u8 { return m68000_device::autovector(2); }));
-	map(mask + 0x7, mask + 0x7)/*.before_time(*this, FUNC(m68000_device::vpa_sync)).after_delay(*this, FUNC(m68000_device::vpa_after))*/.lr8(NAME([] () -> u8 { return m68000_device::autovector(3); }));
-	map(mask + 0x9, mask + 0x9)/*.before_time(*this, FUNC(m68000_device::vpa_sync)).after_delay(*this, FUNC(m68000_device::vpa_after))*/.lr8(NAME([] () -> u8 { return m68000_device::autovector(4); }));
-	map(mask + 0xb, mask + 0xb)/*.before_time(*this, FUNC(m68000_device::vpa_sync)).after_delay(*this, FUNC(m68000_device::vpa_after))*/.lr8(NAME([] () -> u8 { return m68000_device::autovector(5); }));
-	map(mask + 0xd, mask + 0xd)/*.before_time(*this, FUNC(m68000_device::vpa_sync)).after_delay(*this, FUNC(m68000_device::vpa_after))*/.lr8(NAME([] () -> u8 { return m68000_device::autovector(6); }));
-	map(mask + 0xf, mask + 0xf)/*.before_time(*this, FUNC(m68000_device::vpa_sync)).after_delay(*this, FUNC(m68000_device::vpa_after))*/.lr8(NAME([] () -> u8 { return m68000_device::autovector(7); }));
+	map(mask + 0x3, mask + 0x3).flags(VPA).lr8(NAME([] () -> u8 { return m68000_device::autovector(1); }));
+	map(mask + 0x5, mask + 0x5).flags(VPA).lr8(NAME([] () -> u8 { return m68000_device::autovector(2); }));
+	map(mask + 0x7, mask + 0x7).lr8(NAME([] () -> u8 { return m68000_device::autovector(3); }));
+	map(mask + 0x9, mask + 0x9).lr8(NAME([] () -> u8 { return m68000_device::autovector(4); }));
+	map(mask + 0xb, mask + 0xb).lr8(NAME([] () -> u8 { return m68000_device::autovector(5); }));
+	map(mask + 0xd, mask + 0xd).flags(VPA).lr8(NAME([] () -> u8 { return m68000_device::autovector(6); }));
+	map(mask + 0xf, mask + 0xf).flags(VPA).lr8(NAME([] () -> u8 { return m68000_device::autovector(7); }));
 }

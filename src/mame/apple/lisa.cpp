@@ -92,7 +92,9 @@ private:
 	u8 m_iocop_select, m_kbcop_d;
 
 	void lisa_ram_map(address_map &map) ATTR_COLD;
+	void io_map(address_map &map) ATTR_COLD;
 	void lisa_io_map(address_map &map) ATTR_COLD;
+	void lisa210_io_map(address_map &map) ATTR_COLD;
 	void lisa_special_io_map(address_map &map) ATTR_COLD;
 
 	void machine_start() override ATTR_COLD;
@@ -123,7 +125,27 @@ void lisa_state::lisa_special_io_map(address_map &map)
 	map(0x008008, 0x008009).rw(m_mmu, FUNC(lisa_mmu_device::sor_r), FUNC(lisa_mmu_device::sor_w)).mirror(0x003ff6).select(0xfe0000);
 }
 
+// The original I/O board runs both VIAs on the bus E clock and answers
+// them with VPA/ (050-4008 sheet 2, U10D)
 void lisa_state::lisa_io_map(address_map &map)
+{
+	io_map(map);
+	map(0x00d901, 0x00d901).select(0x78).flags(lisa_mmu_device::VPA)
+		.lr8(NAME([this](offs_t offset) -> u8 { return m_via1->read(offset >> 3); })).lw8(NAME([this](offs_t offset, u8 data) { return m_via1->write(offset >> 3, data); }));
+	map(0x00dd80, 0x00dd9f).m(m_via0, FUNC(via6522_device::map)).umask16(0x00ff).flags(lisa_mmu_device::VPA);
+}
+
+// The 2/10 I/O board clocks its VIAs at CPUCK/4 and answers them with
+// DTACK/ (050-4033 sheet 2, U13A)
+void lisa_state::lisa210_io_map(address_map &map)
+{
+	io_map(map);
+	map(0x00d901, 0x00d901).select(0x78)
+		.lr8(NAME([this](offs_t offset) -> u8 { return m_via1->read(offset >> 3); })).lw8(NAME([this](offs_t offset, u8 data) { return m_via1->write(offset >> 3, data); }));
+	map(0x00dd80, 0x00dd9f).m(m_via0, FUNC(via6522_device::map)).umask16(0x00ff);
+}
+
+void lisa_state::io_map(address_map &map)
 {
 	// Extension cards range
 	map(0x000000, 0x00bfff).lr16(NAME([]() -> u16 { return 0xffff; })).nopw();
@@ -152,21 +174,13 @@ void lisa_state::lisa_io_map(address_map &map)
 			}));
 
 	// The I/O board selects the SCC for all of D200-D3FF (A9 in the D000 block)
-	// and wires only A1 (A/B) and A2 (D/C), so it repeats every 8 bytes
-	map(0x00d201, 0x00d201).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::cb_r), FUNC(z80scc_device::cb_w));
-	map(0x00d203, 0x00d203).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::ca_r), FUNC(z80scc_device::ca_w));
-	map(0x00d205, 0x00d205).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::db_r), FUNC(z80scc_device::db_w));
-	map(0x00d207, 0x00d207).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::da_r), FUNC(z80scc_device::da_w));
-
-	map(0x00d901, 0x00d901)
-		//.before_time(m_maincpu, FUNC(m68000_device::vpa_sync))
-		//.after_delay(m_maincpu, FUNC(m68000_device::vpa_after))
-		.lr8(NAME([this](offs_t offset) -> u8 { return m_via1->read(offset >> 3); })).lw8(NAME([this](offs_t offset, u8 data) { return m_via1->write(offset >> 3, data); })).select(0x78);
-
-	map(0x00dd80, 0x00dd9f)
-		//.before_time(m_maincpu, FUNC(m68000_device::vpa_sync))
-		//.after_delay(m_maincpu, FUNC(m68000_device::vpa_after))
-		.m(m_via0, FUNC(via6522_device::map)).umask16(0x00ff);
+	// and wires only A1 (A/B) and A2 (D/C), so it repeats every 8 bytes.
+	// Both I/O boards answer the D000-D3FF block with VPA/ (050-4008 and
+	// 050-4033 sheet 2, LS139 Y0).
+	map(0x00d201, 0x00d201).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::cb_r), FUNC(z80scc_device::cb_w)).flags(lisa_mmu_device::VPA);
+	map(0x00d203, 0x00d203).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::ca_r), FUNC(z80scc_device::ca_w)).flags(lisa_mmu_device::VPA);
+	map(0x00d205, 0x00d205).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::db_r), FUNC(z80scc_device::db_w)).flags(lisa_mmu_device::VPA);
+	map(0x00d207, 0x00d207).mirror(0x0001f8).rw(m_scc, FUNC(z80scc_device::da_r), FUNC(z80scc_device::da_w)).flags(lisa_mmu_device::VPA);
 
 	map(0x00e000, 0x00e001).lr16(NAME([this]() -> u16 { m_mmu->diag1_0();   return 0; })).lw16(NAME([this](u16) { m_mmu->diag1_0();   }));
 	map(0x00e002, 0x00e003).lr16(NAME([this]() -> u16 { m_mmu->diag1_1();   return 0; })).lw16(NAME([this](u16) { m_mmu->diag1_1();   }));
@@ -298,6 +312,8 @@ void lisa_state::lisa210(machine_config &config)
 	m_fdc->write_diag().set(m_via1, FUNC(mos6522_device::write_pb6));
 	m_fdc->write_fdir().set(m_ioir, FUNC(input_merger_device::in_w<0>));
 	m_fdc->write_fdir().append(m_via0, FUNC(mos6522_device::write_pb4));
+
+	m_mmu->set_addrmap(AS_IO, &lisa_state::lisa210_io_map);
 
 	// via
 	m_via0->set_clock(20.37504_MHz_XTAL / 16);

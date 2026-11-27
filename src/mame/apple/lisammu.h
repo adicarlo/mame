@@ -19,6 +19,12 @@ public:
 		AS_SPECIAL_IO = AS_DATA
 	};
 
+	// Address map flag for devices that answer with VPA/ instead of
+	// DTACK/: the 68000 then runs a 6800-style cycle synchronised to E
+	enum : u16 {
+		VPA = 1
+	};
+
 	lisa_mmu_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock = 0);
 
 	template <typename T> void set_cpu(T &&tag) { m_maincpu.set_tag(std::forward<T>(tag)); }
@@ -121,6 +127,7 @@ private:
 	emu_timer *m_video_parity_timer;
 	u16 m_error_address;
 	bool m_bus_timeout;
+	u64 m_vpa_time;
 	u8 m_seg;
 	bool m_diag1, m_diag2;
 	bool m_soft_mask, m_soft_error, m_hard_mask, m_hard_error;
@@ -128,6 +135,7 @@ private:
 	void default_autovectors_map(address_map &map);
 	void ram_access(offs_t address, u16 mem_mask, bool write);
 	void write_cycle(bool diag1, bool diag2);
+	bool vpa_wait(offs_t address);
 	u16 video_error_address() const;
 	void latch_soft_error(u16 error_address);
 	void latch_hard_error(u16 error_address);
