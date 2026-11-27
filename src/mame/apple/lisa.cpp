@@ -136,14 +136,19 @@ void lisa_state::lisa_special_io_map(address_map &map)
 	map(0x008008, 0x008009).rw(m_mmu, FUNC(lisa_mmu_device::sor_r), FUNC(lisa_mmu_device::sor_w)).mirror(0x003ff6).select(0xfe0000);
 }
 
+// The VIAs decode only their register selects in their 1 KB blocks (LS139
+// U4E Y2 = D800-DBFF with RS = A6-A3, Y3 = DC00-DFFF with RS = A4-A1,
+// 050-4008 sheet 2), so they repeat throughout: the Lisa OS's ProFile
+// driver uses D801 and DC01 where the boot ROM uses D901 and DD81.
+//
 // The original I/O board runs both VIAs on the bus E clock and answers
 // them with VPA/ (050-4008 sheet 2, U10D)
 void lisa_state::lisa_io_map(address_map &map)
 {
 	io_map(map);
-	map(0x00d901, 0x00d901).select(0x78).flags(lisa_mmu_device::VPA)
+	map(0x00d801, 0x00d801).mirror(0x0386).select(0x78).flags(lisa_mmu_device::VPA)
 		.lr8(NAME([this](offs_t offset) -> u8 { return m_via1->read(offset >> 3); })).lw8(NAME([this](offs_t offset, u8 data) { return m_via1->write(offset >> 3, data); }));
-	map(0x00dd80, 0x00dd9f).m(m_via0, FUNC(via6522_device::map)).umask16(0x00ff).flags(lisa_mmu_device::VPA);
+	map(0x00dc00, 0x00dc1f).mirror(0x03e0).m(m_via0, FUNC(via6522_device::map)).umask16(0x00ff).flags(lisa_mmu_device::VPA);
 }
 
 // The 2/10 I/O board clocks its VIAs at CPUCK/4 and answers them with
@@ -151,9 +156,9 @@ void lisa_state::lisa_io_map(address_map &map)
 void lisa_state::lisa210_io_map(address_map &map)
 {
 	io_map(map);
-	map(0x00d901, 0x00d901).select(0x78)
+	map(0x00d801, 0x00d801).mirror(0x0386).select(0x78)
 		.lr8(NAME([this](offs_t offset) -> u8 { return m_via1->read(offset >> 3); })).lw8(NAME([this](offs_t offset, u8 data) { return m_via1->write(offset >> 3, data); }));
-	map(0x00dd80, 0x00dd9f).m(m_via0, FUNC(via6522_device::map)).umask16(0x00ff);
+	map(0x00dc00, 0x00dc1f).mirror(0x03e0).m(m_via0, FUNC(via6522_device::map)).umask16(0x00ff);
 }
 
 void lisa_state::io_map(address_map &map)
