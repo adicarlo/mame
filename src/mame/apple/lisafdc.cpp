@@ -370,15 +370,14 @@ void lisa_base_fdc_device::fdir_1()
 // shift register MSB, bit 2 = A2, bit 3 = A3 (write), bit 4 = read pulse
 // (low at a flux transition), bits 0 and 5-7 = state; bit 7 also drives
 // the write data.  Not modelled: the timing counter stalling during 68000
-// accesses (it stalls the 6504 too).
+// accesses (it stalls the 6504 too, but only while DIS is clear, and the
+// firmware sets DIS around disk operations).
 
-// A flux transition is presented to the PROM for two states (500 ns).
-// With one state, as wozfdc does at the Disk II's 2 MHz, some
-// transitions fall where the read program doesn't look and bits are
-// dropped (the 341-0290-B firmware reads track 0 headers wrong and
-// reports error 23).  The width is inferred: the edge detector's clock
-// isn't clear in the manual (6.2.3 names Q1 and Q2 on facing pages).
-static constexpr u64 READ_PULSE_CYCLES = 2;
+// A flux transition is presented to the PROM for one state: RDA goes
+// through two flops in series on the state machine clock, and their
+// NAND makes a one-clock pulse per rising edge (050-4008 sheet 4, U5B
+// and U7B).
+static constexpr u64 READ_PULSE_CYCLES = 1;
 
 u64 lisa_original_fdc_device::time_to_lss_cycles(const attotime &tm) const
 {
@@ -392,7 +391,13 @@ attotime lisa_original_fdc_device::lss_cycles_to_time(u64 cycles) const
 
 void lisa_original_fdc_device::lss_sync(u64 extra_cycles)
 {
-	attotime next_flux = m_cur_floppy ? m_cur_floppy->get_next_transition(lss_cycles_to_time(m_lss_cycles - 1)) : attotime::never;
+	// Look back far enough to catch a transition whose pulse is still
+	// on, then skip one whose pulse has already ended: resuming right
+	// after a pulse would otherwise find that transition again and miss
+	// the next one for the rest of this run
+	attotime next_flux = m_cur_floppy ? m_cur_floppy->get_next_transition(lss_cycles_to_time(m_lss_cycles - READ_PULSE_CYCLES)) : attotime::never;
+	while(next_flux != attotime::never && time_to_lss_cycles(next_flux) + READ_PULSE_CYCLES <= m_lss_cycles)
+		next_flux = m_cur_floppy->get_next_transition(next_flux);
 	u64 cycles_next_flux = next_flux != attotime::never ? time_to_lss_cycles(next_flux) : u64(-1);
 	u64 cycles_next_flux_down = cycles_next_flux != u64(-1) ? cycles_next_flux + READ_PULSE_CYCLES : u64(-1);
 
