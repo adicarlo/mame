@@ -446,11 +446,13 @@ void macxl_fdc_device::update_sel()
 
 void macxl_fdc_device::device_start()
 {
+	lisa_base_fdc_device::device_start();
 	save_item(NAME(m_pwm));
 }
 
 void macxl_fdc_device::device_reset()
 {
+	lisa_base_fdc_device::device_reset();
 	m_pwm = 0;
 }
 
