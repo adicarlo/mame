@@ -157,14 +157,20 @@ void lisa_state::lisa210_io_map(address_map &map)
 
 void lisa_state::io_map(address_map &map)
 {
-	// Extension cards range
-	map(0x000000, 0x00bfff).lr16(NAME([]() -> u16 { return 0xffff; })).nopw();
+	// Expansion slots: with no card nothing answers, so the access runs
+	// into the CPU board's bus timeout (050-4009 sheet 3, 556 U15B)
+	map(0x000000, 0x00bfff).lrw16(
+			NAME([this]() -> u16 {
+				if(!machine().side_effects_disabled())
+					m_mmu->bus_timeout();
+				return 0xffff;
+			}),
+			NAME([this](u16 data) { m_mmu->bus_timeout(); }));
 
-	// The disk controller's RAM sits on D0-D7.  The board doesn't qualify
-	// writes with LDS, so a byte write to the even address lands too (the
-	// 68000 drives a written byte on both halves of the bus): LisaTest's
-	// diskette controller test sends commands to $FCC000 on the Lisa 2/5
-	// (inferred from that; the I/O board schematic isn't legible here).
+	// The disk controller's RAM sits on D0-D7.  The board wires neither
+	// LDS nor UDS nor A0 (050-4008 sheet 4), so a byte write to the even
+	// address lands too, the 68000 driving a written byte on both halves
+	// of the bus; LisaTest's diskette controller test relies on it.
 	// While the 6504 holds DIS the board gives no DTACK, so the access
 	// runs into the CPU board's bus timeout (HW manual Sep82 6.2.2).
 	map(0x00c000, 0x00c7ff).lrw16(
