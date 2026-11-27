@@ -107,6 +107,7 @@ u16 lisa_mmu_device::mmu::read(offs_t addr, u16 mem_mask)
 			m_maincpu->trigger_bus_error();
 			return 0;
 		}
+		newaddr &= PHYSICAL_MASK;
 		m_dev.ram_access(newaddr, mem_mask, false);
 		return m_ram.read_interruptible(newaddr, mem_mask);
 
@@ -115,6 +116,7 @@ u16 lisa_mmu_device::mmu::read(offs_t addr, u16 mem_mask)
 			m_maincpu->trigger_bus_error();
 			return 0;
 		}
+		newaddr &= PHYSICAL_MASK;
 		m_dev.ram_access(newaddr, mem_mask, false);
 		return m_ram.read_interruptible(newaddr, mem_mask);
 
@@ -179,6 +181,7 @@ void lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
 			m_maincpu->trigger_bus_error();
 			return;
 		}
+		newaddr &= PHYSICAL_MASK;
 		m_ram.write_interruptible(newaddr, data, mem_mask);
 		m_dev.ram_access(newaddr, mem_mask, true);
 		return;
@@ -188,6 +191,7 @@ void lisa_mmu_device::mmu::write_access(offs_t addr, u16 data, u16 mem_mask)
 			m_maincpu->trigger_bus_error();
 			return;
 		}
+		newaddr &= PHYSICAL_MASK;
 		m_ram.write_interruptible(newaddr, data, mem_mask);
 		m_dev.ram_access(newaddr, mem_mask, true);
 		return;
@@ -285,12 +289,14 @@ bool lisa_mmu_device::mmu::translate(int spacenum, int intention, offs_t &addres
 	case MAIN_RW: case MAIN_RO:
 		if(address >= m_limit_address[slot])
 			return false;
+		address &= PHYSICAL_MASK;
 		target_space = &m_a_ram;
 		return true;
 
 	case MAIN_RW_STACK: case MAIN_RO_STACK:
 		if(address < m_limit_address[slot])
 			return false;
+		address &= PHYSICAL_MASK;
 		target_space = &m_a_ram;
 		return true;
 

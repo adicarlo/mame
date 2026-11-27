@@ -74,6 +74,11 @@ private:
 
 	static const u8 mode_table[16];
 
+	// The MMU adds the segment origin to the offset in 21 bits, so a
+	// memory segment's physical address wraps at 2 MB (hardware manual
+	// 2.3.1); the limit check is on the offset, before the wrap
+	static constexpr offs_t PHYSICAL_MASK = 0x1fffff;
+
 	class mmu : public m68000_device::mmu {
 	public:
 		mmu(lisa_mmu_device &dev, m68000_device *maincpu, address_space &ram, address_space &io, address_space &special_io, address_space &cpu_space);
