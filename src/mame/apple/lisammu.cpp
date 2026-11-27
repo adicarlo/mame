@@ -309,6 +309,7 @@ void lisa_mmu_device::device_start()
 	save_item(NAME(m_bad_parity));
 	save_item(NAME(m_bad_parity_count));
 	save_item(NAME(m_error_address));
+	save_item(NAME(m_bus_timeout));
 	save_item(NAME(m_diag1));
 	save_item(NAME(m_diag2));
 	save_item(NAME(m_soft_mask));
@@ -330,6 +331,7 @@ void lisa_mmu_device::device_reset()
 	m_diag1 = m_diag2 = false;
 	m_soft_mask = m_hard_mask = true;
 	m_soft_error = m_hard_error = false;
+	m_bus_timeout = false;
 	update_nmi();
 	m_video_parity_timer->adjust(m_video->frame_period(), 0, m_video->frame_period());
 }
@@ -375,8 +377,18 @@ u16 lisa_mmu_device::status_r()
 	// Bits 0 and 1 are the soft and hard error latches, active low.
 	// Bit 3 is the bus timeout latch (BUST/, active low): set when AS/
 	// stays asserted for ~56 us with no device answering, cleared by
-	// reading F000.  Every access completes here, so it always reads 1.
-	return m_video->status_r() | (m_soft_error ? 0x00 : 0x01) | (m_hard_error ? 0x00 : 0x02) | 0x08;
+	// reading F000.
+	return m_video->status_r() | (m_soft_error ? 0x00 : 0x01) | (m_hard_error ? 0x00 : 0x02) | (m_bus_timeout ? 0x00 : 0x08);
+}
+
+// A device withheld DTACK: the 556 timer on AS/ (CPU schematic sheet 3
+// D-4, 5.1K and 0.01 uF, about 56 us) sets BUST/, which raises BERR and
+// latches status bit 3
+void lisa_mmu_device::bus_timeout()
+{
+	m_maincpu->access_after_delay(attotime::from_usec(56).as_ticks(m_maincpu->clock()));
+	m_maincpu->trigger_bus_error();
+	m_bus_timeout = true;
 }
 
 void lisa_mmu_device::setup_1()
@@ -475,7 +487,9 @@ u16 lisa_mmu_device::parity_error_address_r()
 {
 	// The register takes the address of every memory cycle until an error
 	// is latched.  The CPU reading it is in an I/O cycle, so the last
-	// memory cycle was a video fetch.
+	// memory cycle was a video fetch.  Reading it (RMEA/) clears BUST/.
+	if(!machine().side_effects_disabled())
+		m_bus_timeout = false;
 	if(!m_soft_error && !m_hard_error)
 		return video_error_address();
 	return m_error_address;

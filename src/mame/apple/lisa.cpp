@@ -128,7 +128,24 @@ void lisa_state::lisa_io_map(address_map &map)
 	// Extension cards range
 	map(0x000000, 0x00bfff).lr16(NAME([]() -> u16 { return 0xffff; })).nopw();
 
-	map(0x00c000, 0x00c7ff).rw(m_fdc, FUNC(lisa_base_fdc_device::ram_r), FUNC(lisa_base_fdc_device::ram_w)).umask16(0x00ff);
+	// While the disk controller's 6504 holds DIS the I/O board gives no
+	// DTACK, so the access runs into the CPU board's bus timeout (HW manual
+	// Sep82 6.2.2)
+	map(0x00c000, 0x00c7ff).lrw8(
+			NAME([this](offs_t offset) -> u8 {
+				if(m_fdc->dis()) {
+					if(!machine().side_effects_disabled())
+						m_mmu->bus_timeout();
+					return 0xff;
+				}
+				return m_fdc->ram_r(offset);
+			}),
+			NAME([this](offs_t offset, u8 data) {
+				if(m_fdc->dis())
+					m_mmu->bus_timeout();
+				else
+					m_fdc->ram_w(offset, data);
+			})).umask16(0x00ff);
 
 	// The I/O board selects the SCC for all of D200-D3FF (A9 in the D000 block)
 	// and wires only A1 (A/B) and A2 (D/C), so it repeats every 8 bytes

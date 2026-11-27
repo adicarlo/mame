@@ -33,6 +33,7 @@ public:
 	u16 status_r();
 
 	u16 parity_error_address_r();
+	void bus_timeout();
 
 	void setup_1();
 	void setup_0();
@@ -119,6 +120,7 @@ private:
 	u32 m_bad_parity_count;
 	emu_timer *m_video_parity_timer;
 	u16 m_error_address;
+	bool m_bus_timeout;
 	u8 m_seg;
 	bool m_diag1, m_diag2;
 	bool m_soft_mask, m_soft_error, m_hard_mask, m_hard_error;

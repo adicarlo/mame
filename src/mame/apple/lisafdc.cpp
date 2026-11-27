@@ -177,6 +177,7 @@ void lisa_base_fdc_device::device_start()
 	save_item(NAME(m_hds));
 	save_item(NAME(m_sel));
 	save_item(NAME(m_phases));
+	save_item(NAME(m_dis));
 }
 
 void lisa_base_fdc_device::device_reset()
@@ -184,6 +185,7 @@ void lisa_base_fdc_device::device_reset()
 	m_sel = 0;
 	m_hds = 0;
 	m_phases = 0;
+	m_dis = false;
 	update_sel();
 }
 
@@ -305,14 +307,15 @@ void lisa_base_fdc_device::mt1_1()
 	logerror("mt1 1\n");
 }
 
+// DIS locks the 68000 out of the shared RAM (HW manual Sep82 6.2.2)
 void lisa_base_fdc_device::dis_0()
 {
-	logerror("dis 0\n");
+	m_dis = false;
 }
 
 void lisa_base_fdc_device::dis_1()
 {
-	logerror("dis 1\n");
+	m_dis = true;
 }
 
 void lisa_base_fdc_device::hds_0()

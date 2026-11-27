@@ -16,6 +16,7 @@ class lisa_base_fdc_device : public device_t {
 public:
 	u8 ram_r(offs_t offset);
 	void ram_w(offs_t offset, u8 data);
+	bool dis() const { return m_dis; }
 
 	auto write_diag() { return m_diag_cb.bind(); }
 	auto write_fdir() { return m_fdir_cb.bind(); }
@@ -29,6 +30,7 @@ protected:
 	devcb_write_line m_fdir_cb;
 	floppy_image_device *m_cur_floppy;
 	u8 m_hds, m_sel, m_phases;
+	bool m_dis;
 
 	lisa_base_fdc_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock = 0);
 
