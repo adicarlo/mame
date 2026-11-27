@@ -98,6 +98,21 @@ const tiny_rom_entry *lisa2_fdc_device::device_rom_region() const
 	return ROM_NAME( lisa2_fdc );
 }
 
+// The Lisa 2/5's Sony drive takes the speed byte as the same PWM value
+// the Mac XL board writes to its speed register: both firmwares start
+// with $FF, $D5, $D0 (inferred; the converter board isn't documented)
+void lisa2_fdc_device::speed_w(u8 data)
+{
+	m_pwm = data;
+	update_pwm();
+}
+
+void lisa2_fdc_device::update_sel()
+{
+	lisa_original_fdc_device::update_sel();
+	update_pwm();
+}
+
 const tiny_rom_entry *macxl_fdc_device::device_rom_region() const
 {
 	return ROM_NAME( macxl_fdc );
@@ -116,7 +131,8 @@ lisa_base_fdc_device::lisa_base_fdc_device(const machine_config &mconfig, device
 }
 
 lisa_original_fdc_device::lisa_original_fdc_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock) :
-	lisa_base_fdc_device(mconfig, type, tag, owner, clock)
+	lisa_base_fdc_device(mconfig, type, tag, owner, clock),
+	m_lss_rom(*this, "state")
 {
 }
 
@@ -179,6 +195,7 @@ void lisa_base_fdc_device::device_start()
 	save_item(NAME(m_sel));
 	save_item(NAME(m_phases));
 	save_item(NAME(m_dis));
+	save_item(NAME(m_pwm));
 }
 
 void lisa_base_fdc_device::device_reset()
@@ -187,6 +204,7 @@ void lisa_base_fdc_device::device_reset()
 	m_hds = 0;
 	m_phases = 0;
 	m_dis = false;
+	m_pwm = 0;
 	update_sel();
 }
 
@@ -225,16 +243,7 @@ void lisa_original_fdc_device::map(address_map &map)
 {
 	map(0x0000, 0x03ff).ram().share(m_ram);
 
-	map(0x0400, 0x0400).lr8(NAME([this]() -> u8 { ph0_0();  return 0; })).lw8(NAME([this](u8) { ph0_0();  }));
-	map(0x0401, 0x0401).lr8(NAME([this]() -> u8 { ph0_1();  return 0; })).lw8(NAME([this](u8) { ph0_1();  }));
-	map(0x0402, 0x0402).lr8(NAME([this]() -> u8 { ph1_0();  return 0; })).lw8(NAME([this](u8) { ph1_0();  }));
-	map(0x0403, 0x0403).lr8(NAME([this]() -> u8 { ph1_1();  return 0; })).lw8(NAME([this](u8) { ph1_1();  }));
-	map(0x0404, 0x0404).lr8(NAME([this]() -> u8 { ph2_0();  return 0; })).lw8(NAME([this](u8) { ph2_0();  }));
-	map(0x0405, 0x0405).lr8(NAME([this]() -> u8 { ph2_1();  return 0; })).lw8(NAME([this](u8) { ph2_1();  }));
-	map(0x0406, 0x0406).lr8(NAME([this]() -> u8 { ph3_0();  return 0; })).lw8(NAME([this](u8) { ph3_0();  }));
-	map(0x0407, 0x0407).lr8(NAME([this]() -> u8 { ph3_1();  return 0; })).lw8(NAME([this](u8) { ph3_1();  }));
-	map(0x0408, 0x0408).lr8(NAME([this]() -> u8 { hds_0();  return 0; })).lw8(NAME([this](u8) { hds_0();  }));
-	map(0x0409, 0x0409).lr8(NAME([this]() -> u8 { hds_1();  return 0; })).lw8(NAME([this](u8) { hds_1();  }));
+	map(0x0400, 0x040f).rw(FUNC(lisa_original_fdc_device::latch_r), FUNC(lisa_original_fdc_device::latch_w));
 
 	map(0x0410, 0x0410).lr8(NAME([this]() -> u8 { dr1_0();  return 0; })).lw8(NAME([this](u8) { dr1_0();  }));
 	map(0x0411, 0x0411).lr8(NAME([this]() -> u8 { dr1_1();  return 0; })).lw8(NAME([this](u8) { dr1_1();  }));
@@ -243,7 +252,7 @@ void lisa_original_fdc_device::map(address_map &map)
 	map(0x0414, 0x0414).lr8(NAME([this]() -> u8 { mt0_0();  return 0; })).lw8(NAME([this](u8) { mt0_0();  }));
 	map(0x0415, 0x0415).lr8(NAME([this]() -> u8 { mt0_1();  return 0; })).lw8(NAME([this](u8) { mt0_1();  }));
 	map(0x0416, 0x0416).lr8(NAME([this]() -> u8 { mt1_0();  return 0; })).lw8(NAME([this](u8) { mt1_0();  }));
-	map(0x0417, 0x0417).lr8(NAME([this]() -> u8 { mt1_1();  return 0; })).lw8(NAME([this](u8) { mt1_1();  }));
+	map(0x0417, 0x0417).lr8(NAME([this]() -> u8 { speed_clock(); return 0; })).lw8(NAME([this](u8) { speed_clock(); }));
 	map(0x0418, 0x0418).lr8(NAME([this]() -> u8 { dis_0();  return 0; })).lw8(NAME([this](u8) { dis_0();  }));
 	map(0x0419, 0x0419).lr8(NAME([this]() -> u8 { dis_1();  return 0; })).lw8(NAME([this](u8) { dis_1();  }));
 	map(0x041c, 0x041c).lr8(NAME([this]() -> u8 { diag_0(); return 0; })).lw8(NAME([this](u8) { diag_0(); }));
@@ -353,52 +362,227 @@ void lisa_base_fdc_device::fdir_1()
 	m_fdir_cb(1);
 }
 
-void lisa_original_fdc_device::ph0_0()
+// The original I/O board's disk state machine (HW manual Sep82 6.2.4,
+// 6.3.5): the 341-0172 PROM, a state latch and an LS323 shift register,
+// clocked at 4 MHz (250 ns per state).  The PROM is the Disk II's 341-0028
+// with a different write entry sequence and is wired the same way, so the
+// sequencing below mirrors wozfdc's lss_sync.  PROM address: bit 1 =
+// shift register MSB, bit 2 = A2, bit 3 = A3 (write), bit 4 = read pulse
+// (low at a flux transition), bits 0 and 5-7 = state; bit 7 also drives
+// the write data.  Not modelled: the timing counter stalling during 68000
+// accesses (it stalls the 6504 too).
+
+// A flux transition is presented to the PROM for two states (500 ns).
+// With one state, as wozfdc does at the Disk II's 2 MHz, some
+// transitions fall where the read program doesn't look and bits are
+// dropped (the 341-0290-B firmware reads track 0 headers wrong and
+// reports error 23).  The width is inferred: the edge detector's clock
+// isn't clear in the manual (6.2.3 names Q1 and Q2 on facing pages).
+static constexpr u64 READ_PULSE_CYCLES = 2;
+
+u64 lisa_original_fdc_device::time_to_lss_cycles(const attotime &tm) const
 {
-	m_phases &= ~1;
-	update_phases();
+	return tm.as_ticks(16_MHz_XTAL / 4);
 }
 
-void lisa_original_fdc_device::ph0_1()
+attotime lisa_original_fdc_device::lss_cycles_to_time(u64 cycles) const
 {
-	m_phases |= 1;
-	update_phases();
+	return attotime::from_ticks(cycles, 16_MHz_XTAL / 4);
 }
 
-void lisa_original_fdc_device::ph1_0()
+void lisa_original_fdc_device::lss_sync(u64 extra_cycles)
 {
-	m_phases &= ~2;
-	update_phases();
+	attotime next_flux = m_cur_floppy ? m_cur_floppy->get_next_transition(lss_cycles_to_time(m_lss_cycles - 1)) : attotime::never;
+	u64 cycles_next_flux = next_flux != attotime::never ? time_to_lss_cycles(next_flux) : u64(-1);
+	u64 cycles_next_flux_down = cycles_next_flux != u64(-1) ? cycles_next_flux + READ_PULSE_CYCLES : u64(-1);
+
+	if(m_lss_cycles >= cycles_next_flux && m_lss_cycles < cycles_next_flux_down)
+		m_lss_address &= ~0x10;
+	else
+		m_lss_address |= 0x10;
+
+	const u64 cycles_limit = time_to_lss_cycles(machine().time()) + extra_cycles;
+	while(m_lss_cycles < cycles_limit) {
+		u64 cycles_next_trans = cycles_limit;
+		if(cycles_next_trans > cycles_next_flux && m_lss_cycles < cycles_next_flux)
+			cycles_next_trans = cycles_next_flux;
+		if(cycles_next_trans > cycles_next_flux_down && m_lss_cycles < cycles_next_flux_down)
+			cycles_next_trans = cycles_next_flux_down;
+
+		while(m_lss_cycles < cycles_next_trans) {
+			const u8 opcode = m_lss_rom[m_lss_address];
+
+			if(m_lss_address & 0x08) {
+				if(m_lss_write_line != bool(m_lss_address & 0x80)) {
+					m_lss_write_line = !m_lss_write_line;
+					if(m_cur_floppy)
+						m_cur_floppy->write_flux_change(lss_cycles_to_time(m_lss_cycles));
+				}
+			}
+
+			m_lss_address = (m_lss_address & 0x1e) | (opcode & 0xc0) | ((opcode & 0x20) >> 5) | ((opcode & 0x10) << 1);
+			switch(opcode & 0x0f) {
+			case 0: case 1: case 2: case 3: case 4: case 5: case 6: case 7:
+				m_lss_data = 0x00;
+				break;
+			case 0x8: case 0xc:
+				break;
+			case 0x9:
+				m_lss_data <<= 1;
+				break;
+			case 0xa: case 0xe:
+				// Sense: the drive's sense line shifts in at the top
+				m_lss_data = (m_lss_data >> 1) | (m_cur_floppy && m_cur_floppy->wpt_r() ? 0x80 : 0x00);
+				break;
+			case 0xb: case 0xf:
+				m_lss_data = m_lss_load_data;
+				break;
+			case 0xd:
+				m_lss_data = (m_lss_data << 1) | 0x01;
+				break;
+			}
+			if(m_lss_data & 0x80)
+				m_lss_address |= 0x02;
+			else
+				m_lss_address &= ~0x02;
+			m_lss_cycles++;
+		}
+
+		if(m_lss_cycles == cycles_next_flux)
+			m_lss_address &= ~0x10;
+		else if(m_lss_cycles == cycles_next_flux_down) {
+			m_lss_address |= 0x10;
+			next_flux = m_cur_floppy ? m_cur_floppy->get_next_transition(lss_cycles_to_time(m_lss_cycles)) : attotime::never;
+			cycles_next_flux = next_flux != attotime::never ? time_to_lss_cycles(next_flux) : u64(-1);
+			cycles_next_flux_down = cycles_next_flux != u64(-1) ? cycles_next_flux + READ_PULSE_CYCLES : u64(-1);
+		}
+	}
 }
 
-void lisa_original_fdc_device::ph1_1()
+// $0400-$040F: the LS259 at C-2 (A3-A1 pick the bit, A0 is the value):
+// phases 0-3, HDS, state machine clock select, A2, A3/WRQ.  Reads of even
+// addresses also put the shift register on the data bus.
+void lisa_original_fdc_device::latch_control(offs_t offset)
 {
-	m_phases |= 2;
-	update_phases();
+	const bool state = offset & 1;
+	switch(offset >> 1) {
+	case 0: case 1: case 2: case 3:
+		if(state)
+			m_phases |= 1 << (offset >> 1);
+		else
+			m_phases &= ~(1 << (offset >> 1));
+		update_phases();
+		break;
+	case 4:
+		// The latch holds /HDS ("00100 !hds" above).  On the Lisa 2/5 the
+		// firmware's Sony commands only decode that way: $134F is MotorOn,
+		// $1331 reads NotTrack0, $1405 reads NoDrive then DoubleSide.
+		if(state)
+			hds_0();
+		else
+			hds_1();
+		break;
+	case 5:
+		// "enable/disable lss clocking (4MHz exactly)": the firmware sets it
+		// around writes; the effect isn't documented, so it is only kept
+		m_lss_clock_sel = state;
+		break;
+	case 6:
+		if(state)
+			m_lss_address |= 0x04;
+		else
+			m_lss_address &= ~0x04;
+		break;
+	case 7:
+		if(state && !(m_lss_address & 0x08)) {
+			m_lss_address |= 0x08;
+			if(m_cur_floppy) {
+				m_cur_floppy->write_start(machine().time());
+				m_cur_floppy->set_write_splice(machine().time());
+			}
+		} else if(!state && (m_lss_address & 0x08)) {
+			m_lss_address &= ~0x08;
+			if(m_cur_floppy)
+				m_cur_floppy->write_end(machine().time());
+		}
+		break;
+	}
 }
 
-void lisa_original_fdc_device::ph2_0()
+u8 lisa_original_fdc_device::latch_r(offs_t offset)
 {
-	m_phases &= ~4;
-	update_phases();
+	if(machine().side_effects_disabled())
+		return (offset & 1) ? 0x00 : m_lss_data;
+
+	lss_sync();
+	latch_control(offset);
+	if(offset & 1)
+		return 0x00;
+
+	// The state machine runs faster than the 6504 and gets one more
+	// cycle in before the data is sampled (as wozfdc)
+	lss_sync(1);
+	return m_lss_data;
 }
 
-void lisa_original_fdc_device::ph2_1()
+void lisa_original_fdc_device::latch_w(offs_t offset, u8 data)
 {
-	m_phases |= 4;
-	update_phases();
+	lss_sync();
+	latch_control(offset);
+	m_lss_load_data = data;
 }
 
-void lisa_original_fdc_device::ph3_0()
+// The 6504 clocks a speed byte out to the drive, MSB first: the data on
+// PH0, a clock on each MT1/ set (HW manual Sep82 Fig. 9-2: "Phase0/motor
+// data", "Motor Data Clock").  Taken eight bits at a time; the drive end
+// has no framing signal, so that is inferred from the firmware always
+// sending whole bytes ($13B0 in 341-0290-B).
+void lisa_original_fdc_device::speed_clock()
 {
-	m_phases &= ~8;
-	update_phases();
+	m_speed_shift = (m_speed_shift << 1) | (m_phases & 1);
+	if(++m_speed_bits == 8) {
+		m_speed_bits = 0;
+		speed_w(m_speed_shift);
+	}
 }
 
-void lisa_original_fdc_device::ph3_1()
+void lisa_original_fdc_device::update_sel()
 {
-	m_phases |= 8;
-	update_phases();
+	if(m_lss_rom.target())
+		lss_sync();
+	lisa_base_fdc_device::update_sel();
+}
+
+void lisa_original_fdc_device::device_start()
+{
+	lisa_base_fdc_device::device_start();
+	m_lss_cycles = 0;
+	m_lss_address = 0;
+	m_lss_data = 0;
+	m_lss_load_data = 0;
+	m_lss_write_line = false;
+	m_lss_clock_sel = false;
+	m_speed_shift = 0;
+	m_speed_bits = 0;
+	save_item(NAME(m_speed_shift));
+	save_item(NAME(m_speed_bits));
+	save_item(NAME(m_lss_cycles));
+	save_item(NAME(m_lss_address));
+	save_item(NAME(m_lss_data));
+	save_item(NAME(m_lss_load_data));
+	save_item(NAME(m_lss_write_line));
+	save_item(NAME(m_lss_clock_sel));
+}
+
+void lisa_original_fdc_device::device_reset()
+{
+	lisa_base_fdc_device::device_reset();
+	m_lss_cycles = time_to_lss_cycles(machine().time());
+	m_lss_address &= ~0x0e;
+	m_lss_data = 0;
+	m_lss_write_line = false;
+	m_lss_clock_sel = false;
+	m_speed_bits = 0;
 }
 
 void lisa_original_fdc_device::dr1_0()
@@ -447,16 +631,14 @@ void macxl_fdc_device::update_sel()
 void macxl_fdc_device::device_start()
 {
 	lisa_base_fdc_device::device_start();
-	save_item(NAME(m_pwm));
 }
 
 void macxl_fdc_device::device_reset()
 {
 	lisa_base_fdc_device::device_reset();
-	m_pwm = 0;
 }
 
-void macxl_fdc_device::update_pwm()
+void lisa_base_fdc_device::update_pwm()
 {
 	if(!m_cur_floppy)
 		return;

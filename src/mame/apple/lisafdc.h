@@ -31,6 +31,7 @@ protected:
 	floppy_image_device *m_cur_floppy;
 	u8 m_hds, m_sel, m_phases;
 	bool m_dis;
+	u8 m_pwm;
 
 	lisa_base_fdc_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock = 0);
 
@@ -52,22 +53,38 @@ protected:
 
 	virtual void update_sel();
 	void update_phases();
+	void update_pwm();
 };
 
 class lisa_original_fdc_device : public lisa_base_fdc_device {
 protected:
 	lisa_original_fdc_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock = 0);
+	void device_start() override ATTR_COLD;
+	void device_reset() override ATTR_COLD;
 	void device_add_mconfig(machine_config &config) override ATTR_COLD;
 	void map(address_map &map) ATTR_COLD;
 
-	void ph0_0();
-	void ph0_1();
-	void ph1_0();
-	void ph1_1();
-	void ph2_0();
-	void ph2_1();
-	void ph3_0();
-	void ph3_1();
+	// Disk state machine: 256x8 PROM, state latch and LS323 shift register
+	required_region_ptr<u8> m_lss_rom;
+	u64 m_lss_cycles;
+	u8 m_lss_address;
+	u8 m_lss_data;
+	u8 m_lss_load_data;
+	bool m_lss_write_line;
+	bool m_lss_clock_sel;
+	u8 m_speed_shift;
+	u8 m_speed_bits;
+
+	u8 latch_r(offs_t offset);
+	void latch_w(offs_t offset, u8 data);
+	void latch_control(offs_t offset);
+	void lss_sync(u64 extra_cycles = 0);
+	u64 time_to_lss_cycles(const attotime &tm) const;
+	attotime lss_cycles_to_time(u64 cycles) const;
+	virtual void update_sel() override;
+	void speed_clock();
+	virtual void speed_w(u8 data) { }
+
 	void dr1_0();
 	void dr1_1();
 	void dr2_0();
@@ -90,6 +107,8 @@ public:
 protected:
 	void device_add_mconfig(machine_config &config) override ATTR_COLD;
 	const tiny_rom_entry *device_rom_region() const override ATTR_COLD;
+	virtual void update_sel() override;
+	virtual void speed_w(u8 data) override;
 };
 
 class macxl_fdc_device : public lisa_base_fdc_device {
@@ -100,7 +119,6 @@ public:
 
 protected:
 	required_device<iwm_device> m_iwm;
-	u8 m_pwm;
 
 	void device_start() override ATTR_COLD;
 	void device_reset() override ATTR_COLD;
@@ -115,7 +133,6 @@ protected:
 	void phases_w(uint8_t phases);
 
 	virtual void update_sel() override;
-	void update_pwm();
 };
 
 DECLARE_DEVICE_TYPE(LISAFDC,  lisa_fdc_device)
