@@ -33,6 +33,8 @@
 
 #include "formats/ap_dsk35.h"
 
+#include <bit>
+
 
 namespace {
 
@@ -91,6 +93,10 @@ private:
 	bool m_kbd, m_iocop_kbd, m_kbcop_kbd, m_kbcop_so;
 	u8 m_iocop_select, m_kbcop_d;
 
+	// Parallel port parity check (050-4008 sheet 3, U7E/U6E)
+	u8 m_pp_drive_data, m_pp_host_data;
+	bool m_pp_drive_parity, m_pp_dir, m_pp_strb, m_pp_parity_error, m_pp_pres, m_pp_cres;
+
 	void lisa_ram_map(address_map &map) ATTR_COLD;
 	void io_map(address_map &map) ATTR_COLD;
 	void lisa_io_map(address_map &map) ATTR_COLD;
@@ -116,6 +122,9 @@ private:
 	void kbcop_so_w(int state);
 
 	void kbd_update();
+
+	void pp_strb_w(int state);
+	void pp_parity_update();
 };
 
 void lisa_state::lisa_special_io_map(address_map &map)
@@ -279,17 +288,25 @@ void lisa_state::lisa(machine_config &config)
 	QUADMOUSE(config, m_mouse);
 
 	APPLEPP_CONNECTOR(config, m_pp, applepp_intf, nullptr);
-	m_pp->write_pd().set(m_via1, FUNC(mos6522_device::write_pa));
+	m_pp->write_pd().set([this](u8 data) { m_pp_drive_data = data; m_via1->write_pa(data); });
 	m_pp->write_pchk().set(m_via1, FUNC(mos6522_device::write_pb0));
 	m_pp->write_pbsy().set(m_via1, FUNC(mos6522_device::write_pb1));
 	m_pp->write_pbsy().append(m_via1, FUNC(mos6522_device::write_ca1));
-	m_pp->write_pparity().set(m_via1, FUNC(mos6522_device::write_cb2));
-	m_via1->ca2_handler().set(m_pp, FUNC(applepp_connector::pstrb_w));
-	m_via1->writepa_handler().set(m_pp, FUNC(applepp_connector::pd_w));
+	m_pp->write_pparity().set([this](int state) { m_pp_drive_parity = state; });
+	m_via1->ca2_handler().set(FUNC(lisa_state::pp_strb_w));
+	m_via1->writepa_handler().set([this](u8 data) { m_pp_host_data = data; m_pp->pd_w(data); });
 	m_via1->writepb_handler().set([this](u8 data) {
+									  m_pp_dir = BIT(data, 3);
 									  m_pp->prw_w(BIT(data, 3));
 									  m_pp->pcmd_w(BIT(data, 4));
-									  m_pp->pres_w(BIT(data, 7));
+								  });
+	// The keyboard VIA's PB7 is CRES/, the drive reset, and PB5 PRES/,
+	// which clears the parity latch; CRES/ clears it too (050-4008 sheet 2)
+	m_via0->writepb_handler().set([this](u8 data) {
+									  m_pp_pres = BIT(data, 5);
+									  m_pp_cres = BIT(data, 7);
+									  m_pp->pres_w(m_pp_cres);
+									  pp_parity_update();
 								  });
 
 	config.set_perfect_quantum(m_iocop);
@@ -345,6 +362,20 @@ void lisa_state::machine_start()
 	save_item(NAME(m_kbcop_so));
 	save_item(NAME(m_kbcop_d));
 
+	save_item(NAME(m_pp_drive_data));
+	save_item(NAME(m_pp_host_data));
+	save_item(NAME(m_pp_drive_parity));
+	save_item(NAME(m_pp_dir));
+	save_item(NAME(m_pp_strb));
+	save_item(NAME(m_pp_parity_error));
+	save_item(NAME(m_pp_pres));
+	save_item(NAME(m_pp_cres));
+
+	m_pp_drive_data = m_pp_host_data = 0xff;
+	m_pp_drive_parity = m_pp_dir = m_pp_strb = true;
+	m_pp_parity_error = false;
+	m_pp_pres = m_pp_cres = true;
+
 	m_power_button_timer = timer_alloc(FUNC(lisa_state::power_button_release), this);
 	m_iocop_g3 = timer_alloc(FUNC(lisa_state::iocop_g3_freed), this);
 
@@ -360,8 +391,35 @@ void lisa_state::machine_start()
 	m_kbcop_d = 0;
 }
 
+// The LS280 sums the VIA-side data byte (the drive's when DR/W is high,
+// the VIA's otherwise) with the drive's PARITY/ line, and the LS109
+// latches an even sum on the rising edge of PSTRB/.  The latch drives
+// CB2 until PRES/ or CRES/ clears it.
+void lisa_state::pp_strb_w(int state)
+{
+	if(state && !m_pp_strb) {
+		const u8 data = m_pp_dir ? m_pp_drive_data : m_pp_host_data;
+		if(!((std::popcount(data) + m_pp_drive_parity) & 1))
+			m_pp_parity_error = true;
+	}
+	m_pp_strb = state;
+	m_pp->pstrb_w(state);
+	pp_parity_update();
+}
+
+void lisa_state::pp_parity_update()
+{
+	if(!m_pp_pres || !m_pp_cres)
+		m_pp_parity_error = false;
+	m_via1->write_cb2(m_pp_parity_error);
+}
+
 void lisa_state::machine_reset()
 {
+	// System reset pulls CRES/, and so PRES/, low
+	m_pp_parity_error = false;
+	m_via1->write_cb2(0);
+
 	if(m_power_button_forced_pressed)
 		m_power_button_timer->adjust(attotime::from_msec(100));
 }
