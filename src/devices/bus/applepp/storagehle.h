@@ -56,6 +56,8 @@ protected:
 	void write_block(u32 block);
 	void build_spare_table(u8 *dest);
 	void set_status(u8 s1, u8 s2, u8 s3);
+	u32 blocks() const;
+	bool tenmeg() const;
 
 	required_device<harddisk_image_device> m_image;
 	emu_timer *m_respond_timer;
@@ -67,6 +69,7 @@ protected:
 	u8 m_out; // the drive's byte
 	u8 m_response;
 	bool m_nak;
+	bool m_reset_status;
 	u16 m_index, m_count;
 	u8 m_command[6];
 	u8 m_buffer[STATUS_SIZE + BLOCK_SIZE]; // status, then the drive's block buffer
