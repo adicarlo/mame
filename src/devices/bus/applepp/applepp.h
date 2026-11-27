@@ -41,6 +41,7 @@ public:
 	void pd_set(u8 data);
 	void pbsy_set(int level);
 	void pchk_set(int level);
+	void pparity_set(int level);
 
 protected:
 	devcb_write8 m_write_pd;

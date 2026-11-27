@@ -30,11 +30,12 @@ void applepp_connector::device_start()
 
 void applepp_connector::device_reset()
 {
+	// With nothing on the cable the host's TTL inputs float high
 	if(!get_card_device()) {
 		m_write_pchk(1);
 		m_write_pbsy(1);
 		m_write_pparity(1);
-		m_write_pd(1);
+		m_write_pd(0xff);
 	}
 }
 
@@ -82,6 +83,11 @@ void applepp_connector::pd_set(u8 data)
 void applepp_connector::pbsy_set(int state)
 {
 	m_write_pbsy(state);
+}
+
+void applepp_connector::pparity_set(int state)
+{
+	m_write_pparity(state);
 }
 
 void applepp_connector::pchk_set(int state)
