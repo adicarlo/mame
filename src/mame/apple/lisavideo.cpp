@@ -280,12 +280,17 @@ attotime lisa_video_device::frame_period() const
 
 u16 lisa_video_device::status_r()
 {
-	const auto &s = m_video_states[current_state_index()];
-	u16 pixels = m_ram[(((m_base & 0x3f) << 14) & ((m_ram.bytes() >> 1) - 1)) | s.address];
+	const u64 dots = machine().time().as_ticks(clock());
+	const u32 index = (dots / 16) % m_video_states.size();
+	const auto &s = m_video_states[index];
+	const auto &prev = m_video_states[index ? index - 1 : m_video_states.size() - 1];
 
-	// We don't exactly know at which pixel time the read happens.
-	// Given the alternance between cpu read and video read, pick
-	// something in the middle.
+	// VID is the shift register's output, the dot being displayed
+	// (050-4009 sheet 5, U6F/U7F/U3E): the word fetched in the previous
+	// state, MSB first, one bit per dot.  Without a fetch the register
+	// fills with INVID, which reads 0 here.  The exact dot offset within
+	// the state isn't modelled.
+	const int vid = prev.blank ? BIT(m_ram[(((m_base & 0x3f) << 14) & ((m_ram.bytes() >> 1) - 1)) | prev.address], 15 - (dots % 16)) : 0;
 
-	return (m_vint_masked ? 0x00 : 0x04) | (pixels & 0x0100 ? 0x10 : 0x00) | (s.csync ? 0x20 : 0x00) | (0 /* invid */ ? 0x40 : 0x00) | 0x80;
+	return (m_vint_masked ? 0x00 : 0x04) | (vid ? 0x10 : 0x00) | (s.csync ? 0x20 : 0x00) | (0 /* invid */ ? 0x40 : 0x00) | 0x80;
 }
