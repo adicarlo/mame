@@ -59,6 +59,7 @@ public:
 		m_mainram(*this, "mainram"),
 		m_mouse(*this, "mouse"),
 		m_mousebtn(*this, "mousebtn"),
+		m_power(*this, "power"),
 		m_keyboard(*this, "k%02x", 0U)
 	{ }
 
@@ -85,6 +86,7 @@ private:
 
 	required_device<quadmouse_device> m_mouse;
 	required_ioport m_mousebtn;
+	required_ioport m_power;
 	required_ioport_array<32> m_keyboard;
 
 	emu_timer *m_power_button_timer;
@@ -491,7 +493,9 @@ void lisa_state::kbd_update()
 
 u8 lisa_state::iocop_g_r()
 {
-	u8 g = (((!m_power_button_forced_pressed) && !m_iocop_g3_forced_low) ? 8 : 0) | 4;
+	// G3 is the front panel's soft power switch, low while pressed
+	const bool pressed = m_power_button_forced_pressed || BIT(m_power->read(), 0);
+	u8 g = ((!pressed && !m_iocop_g3_forced_low) ? 8 : 0) | 4;
 
 	switch(m_iocop_select) {
 	case 0:
@@ -601,6 +605,9 @@ Small note about natural keyboard support: currently,
 */
 
 static INPUT_PORTS_START( lisa )
+	PORT_START("power")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("Power Switch")
+
 	PORT_START("mousebtn")
 	PORT_BIT(0x0001, IP_ACTIVE_LOW, IPT_BUTTON1) PORT_NAME("Mouse Button 1")
 	PORT_BIT(0x0002, IP_ACTIVE_LOW, IPT_BUTTON2) PORT_NAME("Mouse Button 2")
