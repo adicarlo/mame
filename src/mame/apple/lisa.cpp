@@ -24,6 +24,7 @@
 #include "machine/6522via.h"
 #include "machine/74259.h"
 #include "machine/input_merger.h"
+#include "machine/nvram.h"
 #include "machine/quadmouse.h"
 #include "machine/z80scc.h"
 #include "sound/spkrdev.h"
@@ -91,6 +92,11 @@ private:
 
 	emu_timer *m_power_button_timer;
 	emu_timer *m_iocop_g3;
+	emu_timer *m_clock_timer;
+
+	// The I/O COP keeps the clock on battery power; see clock_seed()
+	s32 m_clock_offset;  // Lisa clock minus host time, in seconds, kept in nvram
+	bool m_clock_seeded;
 
 	bool m_power_button_forced_pressed, m_power_on, m_crdy, m_iocop_g3_forced_low;
 	bool m_kbd, m_iocop_kbd, m_kbcop_kbd, m_kbcop_so;
@@ -111,6 +117,15 @@ private:
 
 	TIMER_CALLBACK_MEMBER(power_button_release);
 	TIMER_CALLBACK_MEMBER(iocop_g3_freed);
+	TIMER_CALLBACK_MEMBER(clock_track);
+
+	static bool clock_leap(int year);
+	static s32 clock_days_before(int year);
+	int clock_year(const system_time::full_time &host) const;
+	s32 clock_host_seconds() const;
+	bool clock_read(s32 &seconds);
+	void clock_write(s32 seconds);
+	void clock_seed();
 
 	u8 iocop_g_r();
 	u8 kbcop_g_r();
@@ -352,6 +367,8 @@ void lisa_state::lisa(machine_config &config)
 								  });
 
 	config.set_perfect_quantum(m_iocop);
+
+	NVRAM(config, "clock", nvram_device::DEFAULT_ALL_0);
 }
 
 void lisa_state::lisa2(machine_config &config)
@@ -418,6 +435,13 @@ void lisa_state::machine_start()
 	m_pp_parity_error = false;
 	m_pp_pres = m_pp_cres = true;
 
+	save_item(NAME(m_clock_offset));
+	save_item(NAME(m_clock_seeded));
+	subdevice<nvram_device>("clock")->set_base(&m_clock_offset, sizeof(m_clock_offset));
+	m_clock_seeded = false;
+	m_clock_timer = timer_alloc(FUNC(lisa_state::clock_track), this);
+	m_clock_timer->adjust(attotime::from_seconds(1), 0, attotime::from_seconds(1));
+
 	m_power_button_timer = timer_alloc(FUNC(lisa_state::power_button_release), this);
 	m_iocop_g3 = timer_alloc(FUNC(lisa_state::iocop_g3_freed), this);
 
@@ -466,6 +490,10 @@ void lisa_state::pp_diagpar_update()
 
 void lisa_state::machine_reset()
 {
+	// The I/O COP restarts with the machine and its firmware clears the
+	// clock, so it is seeded again at its next power-on
+	m_clock_seeded = false;
+
 	// System reset pulls CRES/, and so PRES/, low
 	m_pp_parity_error = false;
 	m_via1->write_cb2(0);
@@ -565,6 +593,119 @@ void lisa_state::kbcop_d_w(u8 data)
 	//  logerror("kbcop_d_w %x (%03x)\n", data, m_kbcop->pcbase());
 }
 
+// The clock lives in the I/O COP's RAM, nibbles 0x10-0x1F (341-0064
+// firmware): tenths, seconds, minutes, hours and day of the year in BCD
+// from 0x10 up, the year from 1980 in binary at 0x1A, and the 5-nibble
+// timer above it; 0x3B holds the mode bits, bits 1-0 non-zero keep it
+// counting.  A real Lisa's COP runs on battery while the machine is off;
+// the COP here restarts with MAME and its firmware clears the clock, so
+// at its first power-on the clock is set from the host's local time plus
+// the offset saved in nvram (zero until set in the Office System's
+// Clock), and the offset is tracked once a second.
+//
+// The year is four bits and the OS accepts only 1981-1995 (OS
+// source-clock GET_TIME/SET_TIME), so the host year is replaced by a
+// year with the same calendar: same leap status and the same weekday on
+// January 1st (2026 becomes 1987), or the same leap status alone if
+// there is none.  The search starts at 1987: the Office System's desktop
+// still reports the clock as not set with 1981, by a check not in the
+// released source.
+bool lisa_state::clock_leap(int year)
+{
+	return !(year % 4) && ((year % 100) || !(year % 400));
+}
+
+s32 lisa_state::clock_days_before(int year)
+{
+	s32 days = 0;
+	for(int y = 1980; y < year; y++)
+		days += clock_leap(y) ? 366 : 365;
+	return days;
+}
+
+int lisa_state::clock_year(const system_time::full_time &host) const
+{
+	const int jan1 = (host.weekday + 7 - host.day % 7) % 7;
+	int fallback = 0;
+	for(int y = 1987; y <= 1995; y++) {
+		if(clock_leap(y) != clock_leap(host.year))
+			continue;
+		if(!fallback)
+			fallback = y;
+		// 1980-01-01 was a Tuesday
+		if((2 + clock_days_before(y)) % 7 == jan1)
+			return y;
+	}
+	return fallback;
+}
+
+// Host local time, moved to the stand-in year, in seconds from 1980
+s32 lisa_state::clock_host_seconds() const
+{
+	system_time now;
+	machine().current_datetime(now);
+	const auto &t = now.local_time;
+	return (clock_days_before(clock_year(t)) + t.day) * 86400 + t.hour * 3600 + t.minute * 60 + t.second;
+}
+
+bool lisa_state::clock_read(s32 &seconds)
+{
+	address_space &ram = m_iocop->space(AS_DATA);
+	u8 n[11];
+	for(int i = 0; i != 11; i++)
+		n[i] = ram.read_byte(0x10 + i) & 0xf;
+	if(!(ram.read_byte(0x3b) & 3) || !n[10] || n[10] == 0xf)
+		return false;
+	for(int i = 0; i != 10; i++)
+		if(n[i] > 9)
+			return false;
+	const int day = n[9] * 100 + n[8] * 10 + n[7];
+	if(!day || day > 366)
+		return false;
+	seconds = (clock_days_before(1980 + n[10]) + day - 1) * 86400
+		+ (n[6] * 10 + n[5]) * 3600 + (n[4] * 10 + n[3]) * 60 + n[2] * 10 + n[1];
+	return true;
+}
+
+void lisa_state::clock_write(s32 seconds)
+{
+	int year = 1980;
+	s32 days = seconds / 86400;
+	while(days >= (clock_leap(year) ? 366 : 365) && year < 1995)
+		days -= clock_leap(year++) ? 366 : 365;
+	const int day = days + 1;
+	const int secs = seconds % 86400;
+	const int hour = secs / 3600, minute = secs / 60 % 60, second = secs % 60;
+	const u8 n[11] = {
+		0, u8(second % 10), u8(second / 10), u8(minute % 10), u8(minute / 10), u8(hour % 10), u8(hour / 10),
+		u8(day % 10), u8(day / 10 % 10), u8(day / 100), u8(year - 1980) };
+
+	address_space &ram = m_iocop->space(AS_DATA);
+	for(int i = 0; i != 11; i++)
+		ram.write_byte(0x10 + i, n[i]);
+	for(int i = 11; i != 16; i++)
+		ram.write_byte(0x10 + i, 0);
+	ram.write_byte(0x3b, ram.read_byte(0x3b) | 1);
+}
+
+void lisa_state::clock_seed()
+{
+	clock_write(clock_host_seconds() + m_clock_offset);
+	m_clock_seeded = true;
+}
+
+TIMER_CALLBACK_MEMBER(lisa_state::clock_track)
+{
+	// Only a real change of the clock moves the offset: seeding loses the
+	// fraction of a second, which would otherwise creep in every run
+	s32 seconds;
+	if(m_clock_seeded && clock_read(seconds)) {
+		const s32 offset = seconds - clock_host_seconds();
+		if(std::abs(offset - m_clock_offset) > 2)
+			m_clock_offset = offset;
+	}
+}
+
 void lisa_state::iocop_d_w(u8 data)
 {
 	bool old_power_on = m_power_on;
@@ -574,6 +715,8 @@ void lisa_state::iocop_d_w(u8 data)
 
 	if(old_power_on != m_power_on) {
 		if(m_power_on) {
+			if(!m_clock_seeded)
+				clock_seed();
 			m_maincpu->resume(SUSPEND_REASON_RESET);
 			m_iocop_g3_forced_low = true;
 			m_iocop_g3->adjust(attotime::from_msec(5));
