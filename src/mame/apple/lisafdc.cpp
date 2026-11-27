@@ -142,19 +142,20 @@ void lisa_original_fdc_device::device_add_mconfig(machine_config &config)
 	m_cpu->set_addrmap(AS_PROGRAM, &lisa_original_fdc_device::map);
 
 	NVRAM(config, m_nvram);
-
-	applefdintf_device::add_twiggy(config, m_floppy[0]);
-	applefdintf_device::add_twiggy(config, m_floppy[1]);
 }
 
 void lisa_fdc_device::device_add_mconfig(machine_config &config)
 {
 	lisa_original_fdc_device::device_add_mconfig(config);
+	applefdintf_device::add_twiggy(config, m_floppy[0]);
+	applefdintf_device::add_twiggy(config, m_floppy[1]);
 }
 
 void lisa2_fdc_device::device_add_mconfig(machine_config &config)
 {
 	lisa_original_fdc_device::device_add_mconfig(config);
+	applefdintf_device::add_35_nc(config, m_floppy[0]);
+	applefdintf_device::add_35_sd(config, m_floppy[1]);
 }
 
 void macxl_fdc_device::device_add_mconfig(machine_config &config)
