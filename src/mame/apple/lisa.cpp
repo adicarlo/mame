@@ -125,6 +125,7 @@ private:
 
 	void pp_strb_w(int state);
 	void pp_parity_update();
+	void pp_diagpar_update();
 };
 
 void lisa_state::lisa_special_io_map(address_map &map)
@@ -291,15 +292,16 @@ void lisa_state::lisa(machine_config &config)
 	QUADMOUSE(config, m_mouse);
 
 	APPLEPP_CONNECTOR(config, m_pp, applepp_intf, nullptr);
-	m_pp->write_pd().set([this](u8 data) { m_pp_drive_data = data; m_via1->write_pa(data); });
+	m_pp->write_pd().set([this](u8 data) { m_pp_drive_data = data; m_via1->write_pa(data); pp_diagpar_update(); });
 	m_pp->write_pchk().set(m_via1, FUNC(mos6522_device::write_pb0));
 	m_pp->write_pbsy().set(m_via1, FUNC(mos6522_device::write_pb1));
 	m_pp->write_pbsy().append(m_via1, FUNC(mos6522_device::write_ca1));
 	m_pp->write_pparity().set([this](int state) { m_pp_drive_parity = state; });
 	m_via1->ca2_handler().set(FUNC(lisa_state::pp_strb_w));
-	m_via1->writepa_handler().set([this](u8 data) { m_pp_host_data = data; m_pp->pd_w(data); });
+	m_via1->writepa_handler().set([this](u8 data) { m_pp_host_data = data; m_pp->pd_w(data); pp_diagpar_update(); });
 	m_via1->writepb_handler().set([this](u8 data) {
 									  m_pp_dir = BIT(data, 3);
+									  pp_diagpar_update();
 									  m_pp->prw_w(BIT(data, 3));
 									  m_pp->pcmd_w(BIT(data, 4));
 								  });
@@ -415,6 +417,14 @@ void lisa_state::pp_parity_update()
 	if(!m_pp_pres || !m_pp_cres)
 		m_pp_parity_error = false;
 	m_via1->write_cb2(m_pp_parity_error);
+}
+
+// DIAGPAR: an LS280 on the connector side of the data bus feeds PB5 its
+// even parity (050-4008 sheet 3, U5F)
+void lisa_state::pp_diagpar_update()
+{
+	const u8 data = m_pp_dir ? m_pp_drive_data : m_pp_host_data;
+	m_via1->write_pb5(!(std::popcount(data) & 1));
 }
 
 void lisa_state::machine_reset()
