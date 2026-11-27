@@ -18,6 +18,7 @@
 #include "lisavideo.h"
 
 #include "bus/applepp/applepp.h"
+#include "bus/rs232/rs232.h"
 #include "cpu/cop400/cop400.h"
 #include "cpu/m68000/m68000.h"
 #include "machine/6522via.h"
@@ -294,6 +295,29 @@ void lisa_state::lisa(machine_config &config)
 	// 3.6864 MHz crystal on RTxCB (050-4008 sheets 2-4)
 	SCC8530(config, m_scc, 16_MHz_XTAL / 4);
 	m_scc->configure_channels(0, 0, (3.6864_MHz_XTAL).value(), 0);
+	// INT goes straight to RSIR/, autovectored at level 6 (050-4009
+	// sheet 3, LS148 U12F)
+	m_scc->out_int_callback().set_inputline(m_maincpu, 6);
+
+	// Serial A (port 1): RS-232 through 1488/1489, DSR on SYNCA.
+	// Serial B (port 2): RS-422 through 26LS30/26LS32, DSR on CTSB; its
+	// DCDB is a board signal (PSI/), not a modem line (050-4008 sheet 3)
+	m_scc->out_txda_callback().set("rs232a", FUNC(rs232_port_device::write_txd));
+	m_scc->out_rtsa_callback().set("rs232a", FUNC(rs232_port_device::write_rts));
+	m_scc->out_dtra_callback().set("rs232a", FUNC(rs232_port_device::write_dtr));
+	m_scc->out_txdb_callback().set("rs232b", FUNC(rs232_port_device::write_txd));
+	m_scc->out_rtsb_callback().set("rs232b", FUNC(rs232_port_device::write_rts));
+	m_scc->out_dtrb_callback().set("rs232b", FUNC(rs232_port_device::write_dtr));
+
+	rs232_port_device &rs232a(RS232_PORT(config, "rs232a", default_rs232_devices, nullptr));
+	rs232a.rxd_handler().set(m_scc, FUNC(z80scc_device::rxa_w));
+	rs232a.cts_handler().set(m_scc, FUNC(z80scc_device::ctsa_w));
+	rs232a.dcd_handler().set(m_scc, FUNC(z80scc_device::dcda_w));
+	rs232a.dsr_handler().set(m_scc, FUNC(z80scc_device::synca_w));
+
+	rs232_port_device &rs232b(RS232_PORT(config, "rs232b", default_rs232_devices, nullptr));
+	rs232b.rxd_handler().set(m_scc, FUNC(z80scc_device::rxb_w));
+	rs232b.dsr_handler().set(m_scc, FUNC(z80scc_device::ctsb_w));
 
 	QUADMOUSE(config, m_mouse);
 
