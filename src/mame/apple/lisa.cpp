@@ -283,7 +283,10 @@ void lisa_state::lisa(machine_config &config)
 	MOS6522(config, m_via1, 20.37504_MHz_XTAL / 40); // CPU E clock (nominally 500 kHz)
 	m_via1->irq_handler().set(m_ioir, FUNC(input_merger_device::in_w<2>));
 
-	SCC8530(config, m_scc, 7833600);
+	// PCLK is the disk controller's 16 MHz divided by 4, and port B has a
+	// 3.6864 MHz crystal on RTxCB (050-4008 sheets 2-4)
+	SCC8530(config, m_scc, 16_MHz_XTAL / 4);
+	m_scc->configure_channels(0, 0, (3.6864_MHz_XTAL).value(), 0);
 
 	QUADMOUSE(config, m_mouse);
 
