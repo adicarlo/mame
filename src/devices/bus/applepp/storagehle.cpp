@@ -109,8 +109,8 @@ void applepp_storage_device::device_reset()
 	m_connector->pbsy_set(1);
 	present(0xff);
 
-	m_respond_timer->adjust(attotime::never);
-	m_ready_timer->adjust(attotime::never);
+	m_respond_timer->enable(false);
+	m_ready_timer->enable(false);
 	m_state = IDLE;
 	m_response = 0;
 	m_nak = false;
@@ -195,7 +195,7 @@ void applepp_storage_device::pcmd_w(int level)
 			start_handshake();
 
 	} else if(m_state == HANDSHAKE) {
-		m_respond_timer->adjust(attotime::never);
+		m_respond_timer->enable(false);
 		if(m_pd == 0x55)
 			accept_response();
 		else {
@@ -242,8 +242,8 @@ void applepp_storage_device::pres_w(int level)
 	// A reset after power-on is a warm start: the drive skips spin-up
 	// and its scan, and reports the reset in the next status
 	if(!level) {
-		m_respond_timer->adjust(attotime::never);
-		m_ready_timer->adjust(attotime::never);
+		m_respond_timer->enable(false);
+		m_ready_timer->enable(false);
 		m_state = IDLE;
 		m_nak = false;
 		m_reset_status = true;
