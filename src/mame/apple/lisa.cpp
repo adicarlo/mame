@@ -512,9 +512,16 @@ TIMER_CALLBACK_MEMBER(lisa_state::iocop_g3_freed)
 	m_iocop_g3_forced_low = false;
 }
 
+// KBD is one open-collector line between the I/O COP and the keyboard's
+// COP.  The I/O COP drives it from SK; the keyboard COP's SK is also its
+// key matrix bank select, and reaches the line only while its SO is high
+// (the manual: data goes out "via the LS03 gates"; inferred from the
+// 341-0064 firmware, which transmits only with EN = 9).  Driven during the
+// scan, the line looked busy to the I/O COP, which reported the keyboard
+// unplugged ($80 $FD) after every key.
 void lisa_state::kbd_update()
 {
-	m_kbd = !(m_iocop_kbd || m_kbcop_kbd);
+	m_kbd = !(m_iocop_kbd || (m_kbcop_kbd && m_kbcop_so));
 	if(0)
 		logerror("kbd %d %d -> %d (%d)\n", m_iocop_kbd, m_kbcop_kbd, m_kbd, (machine().time().as_ticks(3932160*2)+1)/2);
 }
@@ -547,10 +554,8 @@ u8 lisa_state::iocop_g_r()
 u8 lisa_state::kbcop_g_r()
 {
 	if(m_kbcop_so) {
-		u32 pc = m_kbcop->pcbase();
-		//      logerror("kbcop g read %d (%x)\n", (machine().time().as_ticks(3932160*2)+1)/2, m_kbcop->pcbase());
 		// bit3=0 seems to mean reset?
-		return 0xe | (m_kbd  && (pc != 0xb2000) ? 0 : 1);
+		return 0xe | (m_kbd ? 0 : 1);
 
 	} else {
 		int index = (m_kbcop_kbd ? 0x00 : 0x10) | m_kbcop_d;
@@ -574,11 +579,7 @@ void lisa_state::kbcop_kbd_w(int state)
 void lisa_state::kbcop_so_w(int state)
 {
 	m_kbcop_so = state;
-	static int prev = 2;
-	if(prev != state) {
-		prev = state;
-		logerror("kbcop_so_w %d\n", state);
-	}
+	kbd_update();
 }
 
 u8 lisa_state::kbcop_l_r()
