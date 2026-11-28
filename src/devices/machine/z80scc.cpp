@@ -424,6 +424,7 @@ z80scc_device::z80scc_device(const machine_config &mconfig, device_type type, co
 	m_txcb(0),
 	m_out_txd_cb(*this),
 	m_out_dtr_cb(*this),
+	m_out_trxc_cb(*this),
 	m_out_rts_cb(*this),
 	m_out_wreq_cb(*this),
 	m_out_sync_cb(*this),
@@ -1069,6 +1070,11 @@ void z80scc_channel::device_start()
 	m_txc   = 0x00;
 
 	m_baudtimer = timer_alloc(FUNC(z80scc_channel::brg_tick), this);
+	m_trxc_timer = timer_alloc(FUNC(z80scc_channel::trxc_tick), this);
+	m_trxc_period = attotime::never;
+	m_trxc_out = 1;
+	save_item(NAME(m_trxc_period));
+	save_item(NAME(m_trxc_out));
 
 	// state saving
 	save_item(NAME(m_rr0));
@@ -1181,6 +1187,38 @@ void z80scc_channel::device_reset()
 	m_extint_states = m_rr0;
 	m_baudtimer->adjust(attotime::never);
 	m_brg_counter = 0;
+	m_trxc_timer->adjust(attotime::never);
+	m_trxc_period = attotime::never;
+}
+
+// /TRxC as an output echoing the baud rate generator (WR11 D2 = 1, D1-D0 =
+// 10): the generator's output toggles at each zero count.  The other
+// sources (crystal, transmit clock, DPLL) are not modelled.
+TIMER_CALLBACK_MEMBER(z80scc_channel::trxc_tick)
+{
+	m_trxc_out = !m_trxc_out;
+	m_uart->m_out_trxc_cb[m_index](m_trxc_out);
+}
+
+void z80scc_channel::update_trxc()
+{
+	attotime period = attotime::never;
+	if ((m_wr11 & WR11_TRXC_DIRECTION) && (m_wr11 & WR11_TRXSRC_SRC_MASK) == WR11_TRXSRC_SRC_BR
+		&& (m_wr14 & WR14_BRG_ENABLE) && !m_uart->m_out_trxc_cb[m_index].isunset())
+	{
+		const unsigned int brg_const = 2 + (m_wr13 << 8 | m_wr12);
+		const unsigned int source = (m_wr14 & WR14_BRG_SOURCE) ? owner()->clock()
+			: (m_index == z80scc_device::CHANNEL_A) ? m_uart->m_rxca : m_uart->m_rxcb;
+		if (source)
+			period = attotime::from_hz(source) * brg_const;
+	}
+
+	// Keep the phase when nothing changed: this runs on many register writes
+	if (period != m_trxc_period)
+	{
+		m_trxc_period = period;
+		m_trxc_timer->adjust(period, 0, period);
+	}
 }
 
 TIMER_CALLBACK_MEMBER(z80scc_channel::brg_tick)
@@ -3021,6 +3059,7 @@ void z80scc_channel::update_baudtimer()
 	{
 		m_baudtimer->adjust(attotime::never);
 	}
+	update_trxc();
 }
 
 //-------------------------------------------------
@@ -3028,6 +3067,8 @@ void z80scc_channel::update_baudtimer()
 //-------------------------------------------------
 void z80scc_channel::update_serial()
 {
+	update_trxc();
+
 	int data_bit_count = get_rx_word_length();
 	stop_bits_t stop_bits = get_stop_bits();
 	parity_t parity;

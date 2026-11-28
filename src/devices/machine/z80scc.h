@@ -121,6 +121,7 @@ public:
 	void sync_w(int state);
 
 	TIMER_CALLBACK_MEMBER(brg_tick);
+	TIMER_CALLBACK_MEMBER(trxc_tick);
 
 	int m_rxc;
 	int m_txc;
@@ -239,6 +240,7 @@ protected:
 	void rx_clock_edge(int state);
 	void tx_clock_edge(int state);
 	void update_baudtimer();
+	void update_trxc();
 
 	void scc_register_write(uint8_t reg, uint8_t data);
 	uint8_t scc_register_read(uint8_t reg);
@@ -262,6 +264,9 @@ protected:
 	bool rx_holds_special_condition() const;
 
 	emu_timer *m_baudtimer;
+	emu_timer *m_trxc_timer;
+	attotime m_trxc_period;
+	int m_trxc_out;
 	uint16_t m_brg_counter;
 	unsigned int m_brg_rate;
 	unsigned int m_delayed_tx_brg_change;
@@ -329,6 +334,7 @@ class z80scc_device : public device_t, public device_z80daisy_interface
 public:
 	auto out_txda_callback() { return m_out_txd_cb[0].bind(); }
 	auto out_dtra_callback() { return m_out_dtr_cb[0].bind(); }
+	auto out_trxca_callback() { return m_out_trxc_cb[0].bind(); }
 	auto out_rtsa_callback() { return m_out_rts_cb[0].bind(); }
 	auto out_wreqa_callback() { return m_out_wreq_cb[0].bind(); }
 	auto out_synca_callback() { return m_out_sync_cb[0].bind(); }
@@ -336,6 +342,7 @@ public:
 	auto out_txdrqa_callback() { return m_out_txdrq_cb[0].bind(); }
 	auto out_txdb_callback() { return m_out_txd_cb[1].bind(); }
 	auto out_dtrb_callback() { return m_out_dtr_cb[1].bind(); }
+	auto out_trxcb_callback() { return m_out_trxc_cb[1].bind(); }
 	auto out_rtsb_callback() { return m_out_rts_cb[1].bind(); }
 	auto out_wreqb_callback() { return m_out_wreq_cb[1].bind(); }
 	auto out_syncb_callback() { return m_out_sync_cb[1].bind(); }
@@ -458,6 +465,7 @@ protected:
 	// internal state
 	devcb_write_line::array<2> m_out_txd_cb;
 	devcb_write_line::array<2> m_out_dtr_cb;
+	devcb_write_line::array<2> m_out_trxc_cb;
 	devcb_write_line::array<2> m_out_rts_cb;
 	devcb_write_line::array<2> m_out_wreq_cb;
 	devcb_write_line::array<2> m_out_sync_cb;
