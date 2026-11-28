@@ -38,7 +38,42 @@
 #include <bit>
 
 
+// LisaTest's serial port test ("Requires loopback plug") wants, per port:
+// TxD back to RxD; on port A, RTS and DTR coming back as CTS, DCD and DSR,
+// and the transmit clock output (pin 24) back into the receive clock
+// input (pin 17) for its external clock pass; on port B, DTR back to DSR.
+// No document of Apple's plug was found: this wiring is inferred from the
+// test (SERIAL.PLT) and the port pinouts (hardware manual Fig. 3-9).
+class lisa_serial_loopback_device;
+DECLARE_DEVICE_TYPE(LISA_SERIAL_LOOPBACK, lisa_serial_loopback_device)
+
+class lisa_serial_loopback_device : public device_t, public device_rs232_port_interface
+{
+public:
+	lisa_serial_loopback_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock) :
+		device_t(mconfig, LISA_SERIAL_LOOPBACK, tag, owner, clock),
+		device_rs232_port_interface(mconfig, *this)
+	{
+	}
+
+	virtual void input_txd(int state) override { if(started()) output_rxd(state); }
+	virtual void input_rts(int state) override { if(started()) { output_cts(state); output_dcd(state); } }
+	virtual void input_dtr(int state) override { if(started()) output_dsr(state); }
+	virtual void input_etc(int state) override { if(started()) output_rxc(state); }
+
+protected:
+	virtual void device_start() override { }
+};
+
+DEFINE_DEVICE_TYPE(LISA_SERIAL_LOOPBACK, lisa_serial_loopback_device, "lisa_serial_loopback", "Apple Lisa serial loopback plug")
+
 namespace {
+
+void lisa_rs232_devices(device_slot_interface &device)
+{
+	default_rs232_devices(device);
+	device.option_add("lisa_loopback", LISA_SERIAL_LOOPBACK);
+}
 
 class lisa_state : public driver_device
 {
@@ -329,15 +364,19 @@ void lisa_state::lisa(machine_config &config)
 	m_scc->out_dtra_callback().set("rs232a", FUNC(rs232_port_device::write_dtr));
 	m_scc->out_txdb_callback().set("rs232b", FUNC(rs232_port_device::write_txd));
 	m_scc->out_rtsb_callback().set("rs232b", FUNC(rs232_port_device::write_rts));
-	m_scc->out_dtrb_callback().set("rs232b", FUNC(rs232_port_device::write_dtr));
+	// Port B's DTR goes out through an LS04 (050-4008 sheet 3)
+	m_scc->out_dtrb_callback().set("rs232b", FUNC(rs232_port_device::write_dtr)).invert();
+	// Port A's TRxC drives TxC out (pin 24); RxC in (pin 17) feeds RTxC
+	m_scc->out_trxca_callback().set("rs232a", FUNC(rs232_port_device::write_etc));
 
-	rs232_port_device &rs232a(RS232_PORT(config, "rs232a", default_rs232_devices, nullptr));
+	rs232_port_device &rs232a(RS232_PORT(config, "rs232a", lisa_rs232_devices, nullptr));
+	rs232a.rxc_handler().set(m_scc, FUNC(z80scc_device::rtxca_w));
 	rs232a.rxd_handler().set(m_scc, FUNC(z80scc_device::rxa_w));
 	rs232a.cts_handler().set(m_scc, FUNC(z80scc_device::ctsa_w));
 	rs232a.dcd_handler().set(m_scc, FUNC(z80scc_device::dcda_w));
 	rs232a.dsr_handler().set(m_scc, FUNC(z80scc_device::synca_w));
 
-	rs232_port_device &rs232b(RS232_PORT(config, "rs232b", default_rs232_devices, nullptr));
+	rs232_port_device &rs232b(RS232_PORT(config, "rs232b", lisa_rs232_devices, nullptr));
 	rs232b.rxd_handler().set(m_scc, FUNC(z80scc_device::rxb_w));
 	rs232b.dsr_handler().set(m_scc, FUNC(z80scc_device::ctsb_w));
 
