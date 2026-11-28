@@ -18,6 +18,7 @@
 #include "lisavideo.h"
 
 #include "bus/applepp/applepp.h"
+#include "bus/lisa/slot.h"
 #include "bus/rs232/rs232.h"
 #include "cpu/cop400/cop400.h"
 #include "cpu/m68000/m68000.h"
@@ -216,7 +217,8 @@ void lisa_state::lisa210_io_map(address_map &map)
 void lisa_state::io_map(address_map &map)
 {
 	// Expansion slots: with no card nothing answers, so the access runs
-	// into the CPU board's bus timeout (050-4009 sheet 3, 556 U15B)
+	// into the CPU board's bus timeout (050-4009 sheet 3, 556 U15B); a
+	// card installs its own handlers over its slot's two windows
 	map(0x000000, 0x00bfff).lrw16(
 			NAME([this]() -> u16 {
 				if(!machine().side_effects_disabled())
@@ -381,6 +383,15 @@ void lisa_state::lisa(machine_config &config)
 	rs232b.dsr_handler().set(m_scc, FUNC(z80scc_device::ctsb_w));
 
 	QUADMOUSE(config, m_mouse);
+
+	// Expansion slots: slot 1 interrupts at level 5, slot 2 at 4, slot 3
+	// at 3 (hardware manual Sep82, 2.6); cards see CPUCK
+	LISA_EXP_SLOT(config, "slot1", 20.37504_MHz_XTAL / 4, m_mmu, AS_IO, 0x0000, lisa_exp_cards, nullptr)
+		.irq_cb().set_inputline(m_maincpu, 5);
+	LISA_EXP_SLOT(config, "slot2", 20.37504_MHz_XTAL / 4, m_mmu, AS_IO, 0x4000, lisa_exp_cards, nullptr)
+		.irq_cb().set_inputline(m_maincpu, 4);
+	LISA_EXP_SLOT(config, "slot3", 20.37504_MHz_XTAL / 4, m_mmu, AS_IO, 0x8000, lisa_exp_cards, nullptr)
+		.irq_cb().set_inputline(m_maincpu, 3);
 
 	APPLEPP_CONNECTOR(config, m_pp, applepp_intf, nullptr);
 	m_pp->write_pd().set([this](u8 data) { m_pp_drive_data = data; m_via1->write_pa(data); pp_diagpar_update(); });
