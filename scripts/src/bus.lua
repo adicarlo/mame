@@ -3493,6 +3493,20 @@ end
 
 ---------------------------------------------------
 --
+--@src/devices/bus/lisa/slot.h,BUSES["LISA"] = true
+---------------------------------------------------
+
+if BUSES["LISA"] then
+	files {
+		MAME_DIR .. "src/devices/bus/lisa/dualpar.cpp",
+		MAME_DIR .. "src/devices/bus/lisa/dualpar.h",
+		MAME_DIR .. "src/devices/bus/lisa/slot.cpp",
+		MAME_DIR .. "src/devices/bus/lisa/slot.h",
+	}
+end
+
+---------------------------------------------------
+--
 --@src/devices/bus/m5/slot.h,BUSES["M5"] = true
 ---------------------------------------------------
 if BUSES["M5"] then
