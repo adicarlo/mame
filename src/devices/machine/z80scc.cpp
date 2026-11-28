@@ -2008,7 +2008,10 @@ void z80scc_channel::do_sccreg_wr3(uint8_t data)
 	LOG("- Auto Enables            %d\n", (data & WR3_AUTO_ENABLES) ? 1 : 0);
 	LOG("- Receiver Bits/Character %d\n", get_rx_word_length());
 
-	if ((m_wr3 & WR3_ENTER_HUNT_MODE) || ((m_wr3 & WR3_RX_ENABLE) == 0))
+	// Hunt applies to the synchronous modes only: in asynchronous mode the
+	// Sync/Hunt bit reports the /SYNC pin, like /CTS and /DCD (Zilog SCC
+	// databook 1995, pin descriptions, p. 16)
+	if ((m_wr4 & WR4_STOP_BITS_MASK) == 0 && ((m_wr3 & WR3_ENTER_HUNT_MODE) || ((m_wr3 & WR3_RX_ENABLE) == 0)))
 	{
 		m_rr0 |= RR0_SYNC_HUNT; // Set the sync/hunt bit
 	}
